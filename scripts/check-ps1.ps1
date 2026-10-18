@@ -78,6 +78,23 @@ if (Test-Path (Join-Path $PSScriptRoot 'lane-status.ps1')) {
     Write-Output 'The lane status reads as it should.'
 }
 
+# The scratch folder's trust (lane-trust.ps1): written once, the rest of the
+# config kept, and nothing written when the key is already there.
+if (Test-Path (Join-Path $PSScriptRoot 'lane-trust.ps1')) {
+    . (Join-Path $PSScriptRoot 'lane-trust.ps1')
+    $c = Join-Path ([IO.Path]::GetTempPath()) "lane-trust-$PID.json"
+    [IO.File]::WriteAllText($c, '{"numStartups":3,"projects":{"C:/dev/a":{"hasTrustDialogAccepted":false}}}')
+    Expect 'trust written' (Set-ClaudeFolderTrust 'C:\scratch\Temp\' $c) $true
+    $t = Get-Content -LiteralPath $c -Raw | ConvertFrom-Json -AsHashTable
+    Expect 'the folder trusted' $t.projects['C:/scratch/Temp'].hasTrustDialogAccepted $true
+    Expect 'the other config kept' "$($t.numStartups)|$($t.projects['C:/dev/a'].hasTrustDialogAccepted)" '3|False'
+    Expect 'trust already there' (Set-ClaudeFolderTrust 'C:\scratch\Temp' $c) $false
+    Expect 'no config' (Set-ClaudeFolderTrust 'C:\scratch\Temp' "$c.missing") $false
+    Remove-Item -LiteralPath $c -ErrorAction SilentlyContinue
+    if ($bad) { exit 1 }
+    Write-Output 'The scratch folder is trusted as it should be.'
+}
+
 $app = Join-Path $PSScriptRoot 'check-ps1-app.ps1'
 if (Test-Path $app) {
     . $app
