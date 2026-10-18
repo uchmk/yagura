@@ -78,6 +78,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'wintest-queue.ps1')
 . (Join-Path $PSScriptRoot 'lane-marks.ps1')
+. (Join-Path $PSScriptRoot 'lane-trust.ps1')
 . (Join-Path $PSScriptRoot 'lane-status.ps1')
 
 $repo = 'uchmk/yagura'
@@ -615,6 +616,9 @@ try {
     # first open row is the same), and a second run's report under the same
     # name was a changed file, which the Merge lanes workflow refuses.
     $report = 'qa-reports/{0:yyyy-MM-dd}-{1}-{0:HHmm}.md' -f $started, ($branch -replace '^test/', '')
+    # Claude Code asks about trusting a folder the first time it starts in one, and
+    # every run folder is new: trust the scratch root once (lane-trust.ps1).
+    if (-not $DryRun) { Set-ClaudeFolderTrust $scratchRoot | Out-Null }
     $Scratch = Join-Path $Scratch "run-$stamp"
     $kit = Join-Path $Scratch 'kit'
 
