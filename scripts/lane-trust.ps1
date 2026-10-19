@@ -16,7 +16,10 @@
 # trusted or the config could not be read or written (a failed write must not
 # stop a run: the question then waits for Enter as before).
 function Set-ClaudeFolderTrust([string]$Folder, [string]$Config = (Join-Path $HOME '.claude.json')) {
-    $key = [IO.Path]::GetFullPath($Folder).TrimEnd('\', '/') -replace '\\', '/'
+    # A drive-letter path is already full; GetFullPath on a Linux runner would
+    # take `C:\x` for a relative name and put the working folder in front.
+    $full = if ($Folder -match '^[A-Za-z]:[\\/]') { $Folder } else { [IO.Path]::GetFullPath($Folder) }
+    $key = $full.TrimEnd('\', '/') -replace '\\', '/'
     try {
         if (-not (Test-Path -LiteralPath $Config)) { return $false }
         $json = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json -AsHashTable
