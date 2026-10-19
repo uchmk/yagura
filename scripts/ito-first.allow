@@ -1,1 +1,3 @@
 # Known gaps against ito, kept visible on purpose: `<crate> <reason>`. Each line is a migration still to do, not a decision to stay.
+ito-notices Migration to do: yagura still shows toasts through App::toast; the bell list comes with the title bar.
+ito-titlebar Migration to do: yagura still uses the OS window frame; the own title bar needs a real-machine check of drag, maximise and caption buttons.
