@@ -3,6 +3,25 @@
 # same keys (any it leaves out read in English), listed in `i18n::AVAILABLE`.
 # `{0}`, `{1}` … are filled in by the code.
 
+[title]
+search = "Command palette"
+bell = "Notices ({0} unread)"
+minimize = "Minimize"
+maximize = "Maximize"
+restore = "Restore"
+close = "Close"
+
+[notices]
+title = "Notices ({0} unread)"
+mark_read = "Mark all read"
+empty = "No notices"
+ago = "{} ago"
+ok = "done"
+info = "info"
+warn = "check"
+err = "failed"
+wait = "waiting"
+
 [tab]
 overview = "overview"
 cpu = "cpu"

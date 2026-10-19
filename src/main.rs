@@ -211,6 +211,88 @@ impl Yagura {
     }
 }
 
+impl Yagura {
+    /// The window's own bar: the name, the palette box, the bell and the
+    /// caption buttons. The bell opens the list of toasts that went by.
+    fn title_bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let unread = ito_notices::unread(&self.app.notices);
+        let bell = i18n::trf("title.bell", &[&unread.to_string()]);
+        let spec = ito_titlebar::Spec {
+            own: !cfg!(target_os = "macos"),
+            left: if cfg!(target_os = "macos") { 76.0 } else { 0.0 },
+            maximized,
+            unread,
+            any_error: ito_notices::any_error(&self.app.notices),
+            centre: true,
+            words: ito_titlebar::Words {
+                search: i18n::tr("title.search"),
+                search_key: "Ctrl+Shift+P",
+                bell: &bell,
+                minimize: i18n::tr("title.minimize"),
+                maximize: i18n::tr("title.maximize"),
+                restore: i18n::tr("title.restore"),
+                close: i18n::tr("title.close"),
+            },
+        };
+        let out = ito_titlebar::show(
+            ui,
+            &spec,
+            |ui, rect| {
+                let galley = ui.painter().layout_no_wrap("yagura".into(), egui::FontId::proportional(13.0), theme::fg());
+                let x = rect.left() + 12.0;
+                let right = x + galley.size().x;
+                ui.painter().galley(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, egui::Color32::WHITE);
+                right
+            },
+            |_, _| {},
+        );
+        if let Some(r) = out.bell_rect {
+            self.app.bell_at = r;
+        }
+        if out.bell {
+            self.app.bell_open = !self.app.bell_open;
+        }
+        if out.search && self.app.mode != Mode::Settings {
+            self.app.run(Act::Palette);
+        }
+        if let Some(op) = out.window {
+            ito_titlebar::apply(&ctx, op, maximized);
+        }
+    }
+
+    /// The list under the bell, while it is open.
+    fn notice_list(&mut self, ctx: &egui::Context) {
+        if !self.app.bell_open {
+            return;
+        }
+        let title = i18n::trf("notices.title", &[&ito_notices::unread(&self.app.notices).to_string()]);
+        let words = ito_notices::Words {
+            title: &title,
+            mark_read: i18n::tr("notices.mark_read"),
+            empty: i18n::tr("notices.empty"),
+            ago: i18n::tr("notices.ago"),
+            kinds: [
+                i18n::tr("notices.ok"),
+                i18n::tr("notices.info"),
+                i18n::tr("notices.warn"),
+                i18n::tr("notices.err"),
+                i18n::tr("notices.wait"),
+            ],
+        };
+        match ito_notices::show(ctx, self.app.bell_at, &self.app.notices, &words) {
+            Some(ito_notices::Action::Open(_, id)) => {
+                self.app.notices.iter_mut().filter(|n| n.id == id).for_each(|n| n.read = true);
+                self.app.bell_open = false;
+            }
+            Some(ito_notices::Action::ReadAll) => self.app.notices.iter_mut().for_each(|n| n.read = true),
+            Some(ito_notices::Action::Close) => self.app.bell_open = false,
+            None => {}
+        }
+    }
+}
+
 impl eframe::App for Yagura {
     fn on_exit(&mut self) {
         let keeps = ito_prefs::keeps_place(&self.app.prefs.common.window_or_default());
@@ -247,6 +329,11 @@ impl eframe::App for Yagura {
         }
         // common.toml's theme, or the OS's light or dark under `system`.
         self.app.prefs.apply_theme(&ctx);
+        egui::Panel::top("titlebar")
+            .exact_size(ito_titlebar::HEIGHT)
+            .frame(egui::Frame::NONE.fill(theme::bg()))
+            .show(ui, |ui| self.title_bar(ui));
+        self.notice_list(&ctx);
         if self.app.mode == Mode::Settings {
             ui::settings::show(ui, &mut self.app, keys);
         } else {
@@ -269,6 +356,10 @@ impl eframe::App for Yagura {
         }
         if let Some(left) = self.app.probe_agent() {
             ctx.request_repaint_after(left);
+        }
+        // Last, so the edges of the frameless window win over what is under them.
+        if !cfg!(target_os = "macos") {
+            ito_titlebar::resize_edges(&ctx);
         }
         let window = self.app.prefs.common.window_or_default();
         if window.always_on_top != self.on_top {
@@ -524,6 +615,8 @@ fn main() -> eframe::Result {
     // below, while the window is hidden) moves it to the pixels it was
     // closed at, so a second screen at another scale gets it back (#58).
     viewport = saved.viewport(viewport);
+    // The bar is yagura's own (the Mac keeps its traffic lights over it).
+    viewport = ito_titlebar::frameless(viewport);
     if window.always_on_top {
         viewport = viewport.with_always_on_top();
     };

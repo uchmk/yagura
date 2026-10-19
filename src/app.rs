@@ -481,6 +481,11 @@ pub struct App {
     pub interval: f32,
     pub paused: bool,
     pub toast: Option<(String, Instant)>,
+    /// Every toast, kept for the bell's list (the newest last).
+    pub notices: Vec<ito_notices::Notice<()>>,
+    pub bell_open: bool,
+    /// Where the title bar's bell is, so the list opens under it.
+    pub bell_at: egui::Rect,
     pub help_scroll: usize,
     pub palette: ito_palette::View,
     /// What the confirm question is about.
@@ -619,6 +624,9 @@ impl App {
             interval,
             paused: false,
             toast: None,
+            notices: Vec::new(),
+            bell_open: false,
+            bell_at: egui::Rect::NOTHING,
             help_scroll: 0,
             palette: ito_palette::View::new(),
             confirm: None,
@@ -741,7 +749,22 @@ impl App {
     }
 
     pub fn toast(&mut self, s: impl Into<String>) {
-        self.toast = Some((s.into(), Instant::now()));
+        let text: String = s.into();
+        let id = self.notices.last().map_or(1, |n| n.id + 1);
+        self.notices.push(ito_notices::Notice {
+            id,
+            at: std::time::SystemTime::now(),
+            kind: ito_notices::Kind::Info,
+            title: text.clone(),
+            note: None,
+            go: None,
+            read: false,
+        });
+        // The list is for glancing back, not for keeping everything.
+        if self.notices.len() > 50 {
+            self.notices.remove(0);
+        }
+        self.toast = Some((text, Instant::now()));
     }
 
     /// Put `text` on the clipboard (in the frame) and say so.

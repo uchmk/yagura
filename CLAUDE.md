@@ -125,7 +125,7 @@ tsumugi・kura と同じ仕組み（v0.58.0 から）。役割は [.claude/windo
 
 | 場所 | 役割 |
 | --- | --- |
-| `src/main.rs` | eframe の起動、`--keys` の受け付け、フレームごとの `pump` と描画、窓の位置の記憶（`Place`、`window.toml`） |
+| `src/main.rs` | eframe の起動、自前のタイトルバー（`ito-titlebar`）とベルの一覧（`ito-notices`。`App::toast` が最大 50 件を `notices` に残す）、`--keys` の受け付け、フレームごとの `pump` と描画、窓の位置の記憶（`Place`、`window.toml`） |
 | `src/app.rs` | アプリの状態と `Act` の実行（画面・フォーカス・選択・絞り込み・並べ替え・列の幅・トースト）。ほかの機械に入っている間は `Away` が手元の `Model` を預かり、`sync_sources` が手元の収集と相手への `Want` を画面に合わせる |
 | `src/collect/` | 収集のスレッド（cpu / mem / proc / gpu / net のインターフェース / disk / sensors と battery、svc は画面が出ている間は 5 秒・出ていなければ 60 秒ごと（fleet の警告の数のため）、net のソケットは画面が出ている間だけ、hw は起動時に 1 回だけ専用のスレッドで）。`topo/` は起動時に 1 回取るコアの構成（Linux は sysfs、Windows は Win32、macOS は IOKit のデバイスツリーと sysctl） |
 | `src/collect/gpu/` | GPU・NPU。`linux.rs`（drm と accel の sysfs）と `fdinfo.rs`（`/proc/<pid>/fdinfo` の DRM のクライアントからプロセスごとの使用率とメモリ、sysfs に無い使用率）、`windows.rs`（PDH のカウンタを装置ごとにまとめる純粋な関数）と `pdh.rs`（PDH・DXGI の呼び出し）、`kmt.rs`（D3DKMT の温度・ファン・クロック）、`nvidia.rs`（NVML を実行時に読む）、`mac.rs`（IOAccelerator の読み値を装置に畳む純粋な関数）と `ioaccel.rs`（IOKit の呼び出し）。取れない値は `Why` で理由を持つ |

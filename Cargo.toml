@@ -1,6 +1,6 @@
 [package]
 name = "yagura"
-version = "0.72.5"
+version = "0.73.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A keyboard-driven system monitor: cores and threads at a glance"
@@ -41,6 +41,9 @@ ito-notify = { git = "https://github.com/uchmk/ito", rev = "382f9ea5d033e6713ffb
 ito-keyscript = { git = "https://github.com/uchmk/ito", rev = "382f9ea5d033e6713ffb979b01bdf6a1ef5962de" }
 ito-gpu = { git = "https://github.com/uchmk/ito", rev = "382f9ea5d033e6713ffb979b01bdf6a1ef5962de" }
 ito-palette = { git = "https://github.com/uchmk/ito", rev = "382f9ea5d033e6713ffb979b01bdf6a1ef5962de" }
+# The window's own title bar and the notice list under its bell.
+ito-titlebar = { git = "https://github.com/uchmk/ito", rev = "382f9ea5d033e6713ffb979b01bdf6a1ef5962de" }
+ito-notices = { git = "https://github.com/uchmk/ito", rev = "382f9ea5d033e6713ffb979b01bdf6a1ef5962de" }
 ito-theme = { git = "https://github.com/uchmk/ito", rev = "382f9ea5d033e6713ffb979b01bdf6a1ef5962de" }
 ito-prefs = { git = "https://github.com/uchmk/ito", rev = "382f9ea5d033e6713ffb979b01bdf6a1ef5962de" }
 # `yagura.com` (src/bin/yagura-com.rs) and the answers `out` and `err` write
