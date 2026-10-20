@@ -1,6 +1,6 @@
 [package]
 name = "yagura"
-version = "0.73.1"
+version = "0.73.2"
 edition = "2024"
 rust-version = "1.95"
 description = "A keyboard-driven system monitor: cores and threads at a glance"
@@ -20,37 +20,37 @@ toml = "1.1"
 # `--snapshot`: the readings as JSON (pure Rust).
 serde_json = "1"
 # The fleet agent's frames: length + postcard, shared with tsumugi.
-ito-ipc = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-ipc = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 # The split tree behind the resizable panels, shared with tsumugi and kura.
 # Every shared crate is kept in uchmk/ito (since v0.32.1) and pinned to
 # one commit, the same for all of them; to take a fix, move `rev` and run
 # `cargo build` so Cargo.lock follows. It depends on nothing but egui.
-ito-layout = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4", features = ["egui", "serde"] }
+ito-layout = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28", features = ["egui", "serde"] }
 # The translation table and the language setting in common.toml, shared with tsumugi.
-ito-i18n = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-i18n = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 # yazi's key notation and egui's key events in the same terms, shared with tsumugi.
-ito-keys = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4", features = ["egui"] }
-ito-keymap = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
-ito-help = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-keys = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28", features = ["egui"] }
+ito-keymap = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
+ito-help = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 # common.toml (theme, clock, language), editing a TOML file in place and
 # watching it; the themes; the settings screen's frame and widgets. All
 # shared with tsumugi and kura (ito's docs/common-spec.md).
-ito-common = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4", features = ["clock", "egui"] }
-ito-notify = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-common = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28", features = ["clock", "egui"] }
+ito-notify = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 # `--keys` scripts, the wgpu backend choice and the command palette.
-ito-keyscript = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
-ito-gpu = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
-ito-palette = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-keyscript = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
+ito-gpu = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
+ito-palette = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 # The window's own title bar and the notice list under its bell.
-ito-titlebar = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
-ito-notices = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
-ito-theme = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
-ito-prefs = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-titlebar = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
+ito-notices = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
+ito-theme = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
+ito-prefs = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 # `yagura.com` (src/bin/yagura-com.rs) and the answers `out` and `err` write
 # (v0.66.0), shared with every uchmk app.
-ito-console = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-console = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 # The pre-filled bug report F12 opens (shared with every uchmk app).
-ito-bugreport = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-bugreport = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 # The clock's local time (pure Rust).
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # The fleet's direct connections: the Noise handshake and ciphers (pure
@@ -83,11 +83,11 @@ libc = "0.2"
 
 # build.rs writes the icon into yagura.exe's resources as PNG.
 [build-dependencies]
-ito-winres = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-winres = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 
 [dev-dependencies]
 # The checklists' generator behind examples/make-testcheck.rs.
-ito-testcheck = { git = "https://github.com/uchmk/ito", rev = "0eec2687c30d114a0217e289646cfce6e595c9c4" }
+ito-testcheck = { git = "https://github.com/uchmk/ito", rev = "b09c489f985d9d7b1cc849d98518ad34a82cdd28" }
 plist = { version = "1.8", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
