@@ -1,10 +1,11 @@
+# Source is uchmk/ito scripts/lanes/workflows/merge-lanes.yml; written by scripts/lanes.sh sync, so edit ito's.
 name: Merge lanes
 
 # Merges the real-machine lanes' pull requests (test/win-* and test/arm-*)
 # once they keep to the rules in scripts/merge-lanes.py and their checks are
 # green, with a merge commit pinned to the head. The merge routine
 # (.claude/merge-routine.md) used to merge them; the cloud session's auto mode
-# refused such merges in filer (2026-10-10, uchmk/filer#309 and #310). It also
+# refused such merges once (2026-10-10). It also
 # merges a lane pull request that conflicts only in the checklists (main's
 # rows with the pull request's marks made again), and does the merger's share
 # (version, CHANGELOG) and pushes it to main (v0.76.6). Since v0.94.0 what a

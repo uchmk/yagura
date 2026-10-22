@@ -1,8 +1,8 @@
+# Source is uchmk/ito scripts/lanes/workflows/release.yml; written by scripts/lanes.sh sync, so edit ito's.
 name: Release
 
 # A build that keeps its name, does not expire, and downloads without an
-# account. Taken from tsumugi's and kura's release.yml; the reasons written
-# there hold here too.
+# account. The reasons for each step are written beside it.
 #
 # Started by hand from the Actions tab with the tag (`v0.28.0`), which is
 # created at the commit this runs on if it does not exist yet. A cloud session
@@ -70,7 +70,7 @@ jobs:
         run: cargo test --locked
 
       - name: Build x64
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+        run: cargo build --release --locked -p yagura --target x86_64-pc-windows-msvc
 
       # yagura.com: a console program, so PowerShell waits for it and the bare
       # forms that come back empty from the windowed yagura.exe work.
@@ -86,7 +86,7 @@ jobs:
           "yagura.com: $($lines.Count) lines, $ver"
 
       - name: Build ARM64
-        run: cargo build --release --locked --target aarch64-pc-windows-msvc
+        run: cargo build --release --locked -p yagura --target aarch64-pc-windows-msvc
 
       # A zip of one folder: yagura.exe, yagura.com (the console front, so that a
       # shell waits for `yagura env`) and the two licence files.
@@ -162,8 +162,6 @@ jobs:
 
           The Windows downloads are `.zip` holding `yagura.exe`, `yagura.com` and the licence files.
           The macOS and Linux downloads are `.tar.gz`, which keeps the executable bit.
-          Some readings need more rights than a normal user has (other users' processes,
-          SMART, starting and stopping services); the screens say which and why.
           NOTE
 
           printf '\n---\n\n%s\n' \
@@ -172,7 +170,7 @@ jobs:
           cat notes.md
 
       # `target_commitish` pins the tag to the commit built, not to wherever
-      # main has moved during the run (filer's v0.32.2 and v0.33.7 lost that).
+      # main has moved during the run (an earlier release lost that).
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
@@ -219,7 +217,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked -p yagura --target ${{ matrix.target }}
 
       - name: Pack
         run: |

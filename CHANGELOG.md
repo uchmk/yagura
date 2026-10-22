@@ -6,6 +6,12 @@
 
 ## [未リリース]
 
+## [0.73.4] - 2026-10-23
+
+### 変更
+
+- ワークフロー 6 つ（build・arm64・checklists・release・release-sums・merge-lanes）を ito の雛形（`scripts/lanes/workflows/`）から `scripts/lanes.sh sync` で書くようにした。今後の直しは ito で行う。`ci.yml` と `audit.yml` は yagura のまま。動きの違い: ビルドに `-p yagura` が付く、checklists の発火に `examples/**` が入る、リリースのノートから「Some readings need more rights…」の注記が消える。
+
 ## [0.73.3] - 2026-10-23
 
 ### 追加

@@ -1,7 +1,8 @@
+# Source is uchmk/ito scripts/lanes/workflows/build.yml; written by scripts/lanes.sh sync, so edit ito's.
 name: Build
 
 # A downloadable binary for each of the six targets of a release, on every
-# push to main, as kura's build.yml. Kept apart from ci.yml: this one produces
+# push to main. Kept apart from ci.yml: this one produces
 # an artifact, that one is the gate, and a failure here should not read as a
 # failing test. clippy type-checks the macOS and Windows code from Linux but
 # never links, and ci.yml and arm64.yml build in debug and never macOS x64;
@@ -68,7 +69,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked -p yagura --target ${{ matrix.target }}
 
       # The console front a release ships beside yagura.exe, as release.yml
       # checks it: PowerShell waits for it, so the bare forms come back whole.

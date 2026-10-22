@@ -1,6 +1,7 @@
+# Source is uchmk/ito scripts/lanes/workflows/arm64.yml; written by scripts/lanes.sh sync, so edit ito's.
 name: ARM64
 
-# The tests on ARM64 runners, Windows and Linux (v0.42.0), as kura's and tsumugi's arm64.yml.
+# The tests on ARM64 runners, Windows and Linux (v0.42.0),.
 #
 # release.yml cross-builds Windows ARM64 on the x64 runner and builds Linux
 # ARM64 without running the tests; whether they pass on ARM64 is answered

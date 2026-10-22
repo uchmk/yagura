@@ -1,14 +1,15 @@
+# Source is uchmk/ito scripts/lanes/workflows/release-sums.yml; written by scripts/lanes.sh sync, so edit ito's.
 name: Release checksums
 
 # The SHA-256 of every asset of a release, and of every file inside each
 # Windows zip, written onto the release page. `release.yml` calls this once all
 # six assets are attached; it can also be started by hand from the Actions tab
-# for a release that is already out (filer's v0.64.2 needed that).
+# for a release that is already out (a release made before this ran needed that).
 #
 # Re-running replaces the section rather than adding a second one.
 #
 # Everything is written under RUNNER_TEMP, never in the checkout: a folder of
-# the repository's own could share the name (filer's `assets` did).
+# the repository's own could share the name (one did once).
 
 on:
   workflow_call:
