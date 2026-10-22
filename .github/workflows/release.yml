@@ -164,6 +164,12 @@ jobs:
           The macOS and Linux downloads are `.tar.gz`, which keeps the executable bit.
           NOTE
 
+          # The app's own paragraph(s), if it keeps them in scripts/release-notes.md.
+          if [ -f scripts/release-notes.md ]; then
+            echo >> notes.md
+            cat scripts/release-notes.md >> notes.md
+          fi
+
           printf '\n---\n\n%s\n' \
             "詳細は [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/$tag/CHANGELOG.md) にあります（日本語）。" \
             >> notes.md
