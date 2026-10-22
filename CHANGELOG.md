@@ -6,6 +6,16 @@
 
 ## [未リリース]
 
+## [0.73.3] - 2026-10-23
+
+### 追加
+
+- `--keys` の台本に `<Theme:名前>` と `<Lang:ja>` を足した（`<Size:WxH>` は ito の `Runner` が処理する）。common.toml の `theme` / `language` を書き、見張りが反映する。
+
+### 変更
+
+- ito を v0.101.0（3a76165）に上げた。`--keys` の実行中は `UCHMK_CONFIG_DIR` が無いと本物の uchmk フォルダーへの設定書き込みを断る（`xrun.sh` は元から OUTDIR の config を指す）。
+
 ## [0.73.2] - 2026-10-20
 
 ### 変更

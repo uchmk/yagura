@@ -16,6 +16,12 @@
 # (they must all be the same one). ITO_DIR=../ito takes a local checkout
 # instead, to try a change before ito is pushed. lanes.conf's `files=` names
 # the ones the app takes when it does not take them all; this file always.
+#
+# Workflows: ito's scripts/lanes/workflows/*.yml are templates with {{app}},
+# {{crate}} and {{bin}} (lanes.conf's values). lanes.conf's `workflows=` names
+# the ones the app takes; sync writes them to .github/workflows/ with a header
+# line, and check fails when a written copy differs. An app that names none
+# keeps its own workflows.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -43,6 +49,18 @@ else
     done
 fi
 
+conf() { sed -n "s/^$1=//p" scripts/lanes.conf 2>/dev/null | head -n 1; }
+workflows=$(conf workflows | tr ' ' '
+' | grep . || true)
+for w in $workflows; do
+    [ -f "$src/workflows/$w" ] || { echo "lanes: scripts/lanes.conf names workflow $w, which ito's workflows/ does not have" >&2; exit 2; }
+done
+# One workflow, as it is written for this app.
+render() {
+    echo "# Source is uchmk/ito scripts/lanes/workflows/$1; written by scripts/lanes.sh sync, so edit ito's."
+    sed -e "s/{{app}}/$(conf app)/g" -e "s/{{crate}}/$(conf crate)/g" -e "s/{{bin}}/$(conf bin)/g" "$src/workflows/$1"
+}
+
 case "${1:-}" in
     sync)
         for f in $files; do
@@ -51,11 +69,19 @@ case "${1:-}" in
             case $f in *.sh|*.py) chmod +x "scripts/$f.new" ;; esac
             mv -f "scripts/$f.new" "scripts/$f"
         done
-        echo "lanes: $(echo "$files" | wc -l) files from $src" ;;
+        for w in $workflows; do
+            mkdir -p .github/workflows
+            render "$w" > ".github/workflows/$w.new"
+            mv -f ".github/workflows/$w.new" ".github/workflows/$w"
+        done
+        echo "lanes: $(echo "$files" | wc -l) files and $(echo "$workflows" | grep -c . || true) workflows from $src" ;;
     check)
         bad=0
         for f in $files; do
             cmp -s "$src/$f" "scripts/$f" || { echo "lanes: scripts/$f differs from ito's ($src/$f)"; bad=1; }
+        done
+        for w in $workflows; do
+            render "$w" | cmp -s - ".github/workflows/$w" || { echo "lanes: .github/workflows/$w differs from ito's ($src/workflows/$w)"; bad=1; }
         done
         [ $bad = 0 ] || { echo "lanes: edit them in ito, or run scripts/lanes.sh sync"; exit 1; } ;;
     *)

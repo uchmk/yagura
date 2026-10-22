@@ -196,6 +196,17 @@ impl Yagura {
             match d {
                 Do::State(name) => self.write_state(script.dir.join(format!("{name}.txt")), ""),
                 Do::Quit => self.app.quit = true,
+                // The settings page writes common.toml; the watcher applies it.
+                Do::Theme(name) => self.app.prefs.common_change(vec![ito_common::CommonChange {
+                    table: None,
+                    key: "theme",
+                    value: ito_common::quote(&name),
+                }]),
+                Do::Lang(code) => self.app.prefs.common_change(vec![ito_common::CommonChange {
+                    table: None,
+                    key: "language",
+                    value: ito_common::quote(&code),
+                }]),
                 // yagura defines no readings of its own.
                 Do::Read { .. } => {}
                 Do::Done => {
@@ -226,6 +237,7 @@ impl Yagura {
             unread,
             any_error: ito_notices::any_error(&self.app.notices),
             centre: true,
+            right_min: 0.0,
             words: ito_titlebar::Words {
                 search: i18n::tr("title.search"),
                 search_key: "Ctrl+Shift+P",
