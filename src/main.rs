@@ -640,6 +640,8 @@ fn main() -> eframe::Result {
             saved.put(cc);
             cc.egui_ctx.set_visuals(theme::visuals());
             fonts::load_in_background(cc.egui_ctx.clone());
+            // Tell the other uchmk apps where this exe is; best-effort, off the UI thread.
+            std::thread::spawn(|| _ = ito_common::apps::register("yagura", env!("CARGO_PKG_VERSION")));
             let (rx, ctl) = collect::spawn(Some(cc.egui_ctx.clone()), Duration::from_secs_f32(interval));
             let mut app = App::new(km, rx, ctl, layouts, saver, interval);
             app.stacks = stacks;
