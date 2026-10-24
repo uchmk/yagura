@@ -1,0 +1,21 @@
+screen: procs
+machine: this
+mode: Normal
+focus: mid
+sel: [0, 2, 0]
+filter: notepad
+sort: Cpu
+tree: false
+scope: all
+interval: 1
+paused: false
+samples: 5
+procs: 3
+gpus: 2 (luid:0x00000000_0x000126d7 luid:0x00000000_0x00015033)
+nics: 6 (Proxmox Direct イーサネット Tailscale イーサネット 5 Wi-Fi Bluetooth ネットワーク接続)
+disks: 1 (0); volumes: 1 (C:\)
+sensors: 3 (temps 2, fans 1; chips 2)
+hw: ASRock X870E Nova WiFi (SMBIOS 3.4 (GetSystemFirmwareTable)); slots 4 of 4
+topology: 16C/32T · 2 グループ (win32)
+widths: left=148 mid=524 right=328
+toast: Notepad.exe（19948）の優先度を 通常 にしました
