@@ -189,7 +189,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3h.6** Linux: the USB devices match `lsusb` (and `lsusb -t` for the tree under the root hubs) and the PCI ones `lspci -k` (the driver in use); without the hwdata package (`usb.ids` / `pci.ids`) the middle says so and unnamed devices read `USB 046d:c52b`; with it they read the names `lsusb` gives. `echo 0|sudo tee /sys/bus/usb/devices/<n>/authorized` shows it as `Disabled`.
 - [ ] **3h.7** macOS: the USB devices match System Information → USB (names, makers, speeds, what hangs off each hub) and the PCI ones its PCI page (or Thunderbolt / Apple silicon's built-in devices); the driver column names the matched kext class.
 - [ ] **3h.8** Fleet: `Enter` on a v0.43 agent's card, then `D`, shows that machine's devices; an agent older than v0.43 shows `another version` on its card instead (protocol 6).
-- [ ] **3h.9** A narrow window drops the maker column, then the status; long names are cut with `…` and do not run into the next column; with `language = "ja"` the classes on macOS and Linux and every label read in Japanese.
+- [~] **3h.9** A narrow window drops the maker column, then the status; long names are cut with `…` and do not run into the next column; with `language = "ja"` the classes on macOS and Linux and every label read in Japanese.
 - [ ] **3h.10** Fleet (v0.52): a device with a problem (Device Manager shows a yellow mark, e.g. a disabled-by-error one) adds `device problems N` to this machine's card within a minute, even with the devices screen never opened; `N` is the number the devices screen shows in red.
 
 ## 3m. Containers (`C`)
