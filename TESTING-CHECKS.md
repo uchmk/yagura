@@ -216,7 +216,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 
 ## 3j. Zoomed graphs
 
-- [ ] **3j.1** Double click the graph on overview (any gauge), cpu (total), mem (memory and swap), gpu (usage, memory), net (receive, send), disk (read, write, busy) and sensors: it opens over the window with the title, the range (5 min), the latest value, avg / min / max, a scale at the quarters and `… ago` / `now` under it. The quarters are round numbers in one unit and all differ (an idle net graph reads `0 B/s`, `1 B/s` … `4 B/s`; a temperature near 45 °C reads `0°C`, `15°C` … `60°C`). Clicks and the main keys do nothing while it is open; `Esc`, `q` and `Enter` close it.
+- [~] **3j.1** Double click the graph on overview (any gauge), cpu (total), mem (memory and swap), gpu (usage, memory), net (receive, send), disk (read, write, busy) and sensors: it opens over the window with the title, the range (5 min), the latest value, avg / min / max, a scale at the quarters and `… ago` / `now` under it. The quarters are round numbers in one unit and all differ (an idle net graph reads `0 B/s`, `1 B/s` … `4 B/s`; a temperature near 45 °C reads `0°C`, `15°C` … `60°C`). Clicks and the main keys do nothing while it is open; `Esc`, `q` and `Enter` close it.
 - [ ] **3j.2** `]` and `[` (also the arrows, `l` and `h`) step 5 min → 15 min → 1 hour and back; the line keeps moving while it is open; after an hour of running the 1 hour view fills the width; the next zoom opens at the range the last one was left at. With `every 2 s` the time marks double.
 
 ## 3k. Alerts
