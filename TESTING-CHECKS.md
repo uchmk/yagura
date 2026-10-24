@@ -231,8 +231,8 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 
 ## 3l. Process details
 
-- [ ] **3l.1** On procs, the selected process's detail shows Priority, CPUs allowed, Open files and Sockets under Threads... Moving the selection fills them within a second or two; they refresh every 5 s (open a file in a test program and the count rises).
-- [ ] **3l.2** Windows: a normal app reads "Normal"; setting it to "Below normal" in Task Manager shows within 5 s; a service of another user shows `—` (not an error). Setting an affinity in Task Manager shows as ranges (`0-3`).
+- [~] **3l.1** On procs, the selected process's detail shows Priority, CPUs allowed, Open files and Sockets under Threads... Moving the selection fills them within a second or two; they refresh every 5 s (open a file in a test program and the count rises).
+- [~] **3l.2** Windows: a normal app reads "Normal"; setting it to "Below normal" in Task Manager shows within 5 s; a service of another user shows `—` (not an error). Setting an affinity in Task Manager shows as ranges (`0-3`).
 - [ ] **3l.3** Linux / macOS: `nice -n 5 sleep 100` reads 5; `taskset -c 0,2 sleep 100` (Linux) reads `0,2`. Inside another machine (fleet) the extra rows are not shown.
 
 ## 3o. Logins and the power plan (sys)
