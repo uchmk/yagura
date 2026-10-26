@@ -32,6 +32,8 @@
   クラウドのセッションからタグは push できない）。`Cargo.toml` の版と違えば落ちる。成果物は 6 つ（Windows は `.zip`、macOS と Linux は `.tar.gz`、
   Windows は `yagura.exe`・`yagura.com`・ライセンスの 4 つ、ほかは実行ファイルとライセンスの 3 つのファイル）、最後に `release-sums.yml`（中身は `scripts/release-sums.sh`）が SHA-256 の表をノートに足す。
 - ノートは前のタグからの `vX.Y.Z:` のコミットの最初の段落から作る。前のリリースのタグができてから次を投げる。
+- **`release.yml` の成功で終わりにしない。**`bash scripts/release-check.sh vX.Y.Z` が `RELEASE OK`（成果物 6 つ・SHA-256 の表に 6 行・ノート）になるまでが完了。
+  表を見ていないまま「完了」と報告しない。見られなければ「未確認」と理由を書く。
 
 ## ビルド・検証
 
