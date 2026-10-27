@@ -111,6 +111,8 @@ fn run(
             KeyCode::Tab => {
                 app.view = if app.view == View::Guests { View::Procs } else { View::Guests };
                 app.selected = 0;
+                // Drop whatever the terminal still shows from the other view.
+                term.clear()?;
             }
             KeyCode::Char('j') | KeyCode::Down => app.selected = (app.selected + 1).min(rows.saturating_sub(1)),
             KeyCode::Char('k') | KeyCode::Up => app.selected = app.selected.saturating_sub(1),

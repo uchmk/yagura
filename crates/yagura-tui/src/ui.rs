@@ -1,5 +1,7 @@
 //! Drawing. Colours are the terminal's own: red for what needs a look (swap
-//! near its limit, a failed read), reverse video for the selection.
+//! near its limit, a failed read), reverse video for the selection. Only
+//! ASCII symbols: some terminals draw "ambiguous width" ones (arrows, `…`)
+//! two columns wide, which leaves stale cells behind when the view changes.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -52,7 +54,7 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
 
 fn note(n: Option<Note>) -> String {
     match n {
-        None => "reading…".into(),
+        None => "reading...".into(),
         Some(Note::OtherOs) => "not Linux".into(),
         Some(Note::NoPvesh) => "no pvesh: not a Proxmox host".into(),
         Some(Note::Failed) => "pvesh failed (root needed?)".into(),
@@ -67,7 +69,7 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         let rate = m.rates.get(&g.id).copied().unwrap_or_default();
         let (swap, swap_style) = match g.swap {
             Some(s) => (
-                format!("{}/{}", bytes(s.used), s.max.map_or("∞".into(), bytes)),
+                format!("{}/{}", bytes(s.used), s.max.map_or("inf".into(), bytes)),
                 if s.near_limit() { RED.add_modifier(Modifier::BOLD) } else { Style::new() },
             ),
             None => ("-".into(), DIM),
@@ -81,13 +83,14 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
             Cell::from(if run { pct(g.cpu * 100.0) } else { String::new() }),
             Cell::from(format!("{}/{}", bytes(g.mem), bytes(g.maxmem))),
             Cell::from(swap).style(swap_style),
-            Cell::from(if run { format!("{}↓ {}↑", bytes(rate.rx as u64), bytes(rate.tx as u64)) } else { String::new() }),
+            Cell::from(if run { format!("{}/{}", bytes(rate.rx as u64), bytes(rate.tx as u64)) } else { String::new() }),
             Cell::from(if run { age(g.uptime) } else { "stopped".into() }),
             Cell::from(g.tags.join(",")),
         ])
         .style(base)
     });
-    let head = Row::new(["ID", "", "NAME", "CPU", "MEM", "SWAP", "NET /s", "UP", "TAGS"]).style(Style::new().add_modifier(Modifier::BOLD));
+    let head =
+        Row::new(["ID", "", "NAME", "CPU", "MEM", "SWAP", "NET in/out /s", "UP", "TAGS"]).style(Style::new().add_modifier(Modifier::BOLD));
     let widths = [
         Constraint::Length(6),
         Constraint::Length(2),
@@ -135,7 +138,7 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
     let Some(g) = m.guests(app.sort).get(app.selected).copied() else { return };
     let mut lines = vec![];
     if m.looking.contains(&g.id) {
-        lines.push(Line::styled("looking inside…", DIM));
+        lines.push(Line::styled("looking inside...", DIM));
     } else if let Some(i) = m.inside.get(&g.id) {
         lines.push(Line::raw(format!("os: {}", i.os.as_deref().unwrap_or("?"))));
         let n = |v: Option<u32>| v.map_or("?".into(), |v| v.to_string());
