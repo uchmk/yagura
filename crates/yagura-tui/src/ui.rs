@@ -10,7 +10,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
-use yagura_core::proxmox::{Kind, Note, Status};
+use yagura_core::proxmox::{Kind, Note, Status, apps};
 
 use crate::App;
 use crate::model::{View, age, bytes};
@@ -79,6 +79,7 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         };
         let run = g.status == Status::Running;
         let (os, upd, upd_style) = look(m, g.id, run);
+        let (app_name, ver, new, new_style) = app_cells(m, g.id);
         let base = if run { Style::new() } else { DIM };
         Row::new([
             Cell::from(g.id.to_string()),
@@ -89,13 +90,16 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
             Cell::from(swap).style(swap_style),
             Cell::from(if run { format!("{}/{}", bytes(rate.rx as u64), bytes(rate.tx as u64)) } else { String::new() }),
             Cell::from(if run { age(g.uptime) } else { "stopped".into() }),
+            Cell::from(app_name),
+            Cell::from(ver),
+            Cell::from(new).style(new_style),
             Cell::from(os),
             Cell::from(upd).style(upd_style),
             Cell::from(g.tags.join(",")),
         ])
         .style(base)
     });
-    let head = Row::new(["ID", "", "NAME", "CPU", "MEM", "SWAP", "NET in/out /s", "UP", "OS", "UPD", "TAGS"])
+    let head = Row::new(["ID", "", "NAME", "CPU", "MEM", "SWAP", "NET in/out /s", "UP", "APP", "VER", "NEW", "OS", "UPD", "TAGS"])
         .style(Style::new().add_modifier(Modifier::BOLD));
     let widths = [
         Constraint::Length(6),
@@ -106,6 +110,9 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(11),
         Constraint::Length(16),
         Constraint::Length(8),
+        Constraint::Length(11),
+        Constraint::Length(9),
+        Constraint::Length(9),
         Constraint::Length(16),
         Constraint::Length(5),
         Constraint::Min(6),
@@ -131,6 +138,18 @@ fn look(m: &crate::model::Model, id: u32, running: bool) -> (String, String, Sty
             (short_os(i.os.as_deref().unwrap_or("")), n, style)
         }
     }
+}
+
+/// The app, its version and the latest one; red when it is behind.
+fn app_cells(m: &crate::model::Model, id: u32) -> (String, String, String, Style) {
+    let Some((name, ver, latest)) = m.app(id) else { return Default::default() };
+    let behind = latest.is_some_and(|l| apps::is_older(ver, l));
+    (
+        name.to_string(),
+        ver.to_string(),
+        latest.unwrap_or("").to_string(),
+        if behind { RED.add_modifier(Modifier::BOLD) } else { Style::new() },
+    )
 }
 
 /// `Debian GNU/Linux 12 (bookworm)` as `Debian 12`.
@@ -243,6 +262,18 @@ mod tests {
         let mut a = app(View::Guests);
         a.confirm = Some(crate::Ask { id: 101, name: "web".into(), kind: Kind::Lxc, power: yagura_core::proxmox::Power::Reboot });
         assert!(text(&render(&a)).contains("reboot 101 web (y/n)"));
+    }
+
+    #[test]
+    fn an_app_behind_its_latest_release_is_red() {
+        let mut a = app(View::Guests);
+        a.model.inside.insert(101, yagura_core::proxmox::Inside { apps: vec![("immich".into(), "3.1.0".into())], ..Default::default() });
+        a.model.latest.insert("immich".into(), Some("v3.3.5".into()));
+        let b = render(&a);
+        assert!(text(&b).contains("immich"));
+        assert!(b.content().iter().any(|c| c.symbol() == "3" && c.fg == Color::Red), "the NEW cell should be red");
+        a.model.latest.insert("immich".into(), Some("v3.1.0".into()));
+        assert!(!render(&a).content().iter().any(|c| c.symbol() == "3" && c.fg == Color::Red));
     }
 
     #[test]

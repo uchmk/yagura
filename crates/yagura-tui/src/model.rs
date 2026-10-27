@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use yagura_core::proxmox::{Cluster, Guest, Inside};
+use yagura_core::proxmox::{Cluster, Guest, Inside, apps};
 use yagura_core::{Mem, Proc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +60,8 @@ pub struct Model {
     pub inside: HashMap<u32, Inside>,
     /// Guests being looked into right now.
     pub looking: Vec<u32>,
+    /// Latest release per app (normalised name); `None` once asked and not answered.
+    pub latest: HashMap<String, Option<String>>,
     last: HashMap<u32, (u64, u64, Instant)>,
 }
 
@@ -98,6 +100,13 @@ impl Model {
             })
         });
         v
+    }
+
+    /// The app of a guest to show: the first one with a known repository, else the first one. `(name, installed, latest)`.
+    pub fn app(&self, id: u32) -> Option<(&str, &str, Option<&str>)> {
+        let apps = &self.inside.get(&id)?.apps;
+        let (n, v) = apps.iter().find(|(n, _)| apps::repo(n).is_some()).or(apps.first())?;
+        Some((n, v, self.latest.get(&apps::key(n)).and_then(|l| l.as_deref())))
     }
 
     /// The processes, busiest first.

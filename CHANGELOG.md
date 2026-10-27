@@ -6,6 +6,16 @@
 
 ## [未リリース]
 
+## [0.73.39] - 2026-10-28
+
+### 追加
+
+- `yagura-tui`: コンテナのアプリの版。ゲストの表に APP（名前）・VER（動いている版）・NEW（GitHub の最新）の列を足し、古ければ NEW を赤にする。
+  動いている版は community-scripts が残す `/root/.<アプリ>` と `/opt/<アプリ>_version.txt` から読む（版に見えない行は無視）。
+  最新は `curl` で `releases/latest` を引き、リポジトリごとに 1 時間キャッシュ（`$XDG_CACHE_HOME/yagura/`。認証なしの 60 回/時の制限のため。`GITHUB_TOKEN` があれば使う）。
+  アプリ名とリポジトリの対応表（`yagura_core::proxmox::apps`）に無いアプリは VER だけを出す。
+- `yagura-core`: `proxmox::apps`（版のパース・比較・最新の取得）と `Inside::apps`。
+
 ## [0.73.38] - 2026-10-28
 
 ### 追加

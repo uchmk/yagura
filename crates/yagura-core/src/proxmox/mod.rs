@@ -11,6 +11,8 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod apps;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     #[default]
@@ -229,6 +231,8 @@ pub struct Inside {
     /// Seconds since the apt lists were fetched: how far to trust `upgradable`.
     pub lists_age: Option<u64>,
     pub reboot_required: bool,
+    /// Apps an installer left a version for: `(name, version)`.
+    pub apps: Vec<(String, String)>,
     /// A VM whose guest agent does not answer: nothing could be read.
     pub no_agent: bool,
 }
@@ -355,6 +359,11 @@ pub fn inspect(kind: Kind, id: u32) -> Inside {
             .and_then(|t| t.trim().parse::<u64>().ok())
             .map(|m| now.saturating_sub(m)),
         reboot_required: exec(kind, id, &["test", "-e", "/var/run/reboot-required"]).is_some(),
+        apps: if kind == Kind::Lxc {
+            exec(kind, id, &["sh", "-c", apps::FIND]).map(|t| apps::parse_found(&t)).unwrap_or_default()
+        } else {
+            vec![]
+        },
         no_agent: false,
     }
 }

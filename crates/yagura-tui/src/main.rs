@@ -45,6 +45,7 @@ enum Job {
     Cluster(Cluster),
     Inside(u32, Inside),
     Power(u32, Power, Result<(), String>),
+    Latest(String, Option<String>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -105,7 +106,13 @@ fn run(
                 Job::Cluster(c) => app.model.set_cluster(c, Instant::now()),
                 Job::Inside(id, i) => {
                     app.model.looking.retain(|x| *x != id);
+                    for (name, _) in &i.apps {
+                        start_latest(&mut app.model, name, jobs_tx);
+                    }
                     app.model.inside.insert(id, i);
+                }
+                Job::Latest(key, tag) => {
+                    app.model.latest.insert(key, tag);
                 }
                 Job::Power(id, p, r) => {
                     app.status = match r {
@@ -215,6 +222,22 @@ fn prefetch(app: &mut App, tx: &Sender<Job>) {
     for (id, kind) in todo {
         start_inspect(&mut app.model, id, kind, tx);
     }
+}
+
+/// Ask GitHub (or the cache) for the latest release of an app once per run.
+fn start_latest(m: &mut Model, name: &str, tx: &Sender<Job>) {
+    let key = proxmox::apps::key(name);
+    if proxmox::apps::repo(name).is_none() || m.latest.contains_key(&key) {
+        return;
+    }
+    m.latest.insert(key.clone(), None);
+    let (tx, name) = (tx.clone(), name.to_string());
+    std::thread::Builder::new()
+        .name("yagura-latest".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Latest(key, proxmox::apps::latest(&name)));
+        })
+        .expect("spawn the latest thread");
 }
 
 fn start_inspect(m: &mut Model, id: u32, kind: proxmox::Kind, tx: &Sender<Job>) {

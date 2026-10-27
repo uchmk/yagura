@@ -30,7 +30,8 @@ v0.1.0 で overview・cpu・mem・procs の 4 枚ができた。残りは下の�
 - [ ] ゲストの履歴（rrddata）のグラフ、スナップショット・タスク・設定の表示。
 - [x] VM の swap（`/run/qemu-server/<id>.pid` → `/proc/<pid>/status` の VmSwap。v0.73.37。実機での確認は TESTING.md 3p）。
 - [x] VM の中身（QEMU ゲストエージェント経由。`qm guest exec` と `qm agent get-osinfo`。エージェントが無ければ「no agent」。v0.73.37）。
-- [ ] コンテナの中のアプリの版（community-scripts は `/root/.<appname>`）と GitHub の最新との比較。対応表と 1 時間 60 回の制限のキャッシュが要る。
+- [x] コンテナの中のアプリの版と GitHub の最新との比較（v0.73.39。対応表は `proxmox/apps.rs` の `REPOS`、実機で見つからない名前があれば足す。確認は TESTING.md 3p）。
+- [ ] yagura-tui: ホストとゲストの CPU・メモリ・ディスク・GPU のグラフ（Tab で入る画面。`pvesh get /nodes/<n>/<lxc|qemu>/<id>/rrddata`、GPU はホストの収集とゲストの fdinfo）。
 - [x] 配布物に入れる（v0.73.32: ito の `release.yml` が `yagura-tui` を扱うようになり、`lanes.conf` の `tui_crate` / `tui_bin` で入れた。次のリリースで 8 つの成果物になる）。
 
 ## 1. 残りの画面（番号は v0.1 で固定済み）
