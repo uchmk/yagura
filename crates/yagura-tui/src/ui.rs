@@ -118,16 +118,22 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         let run = g.status == Status::Running;
         let (os, upd, upd_style) = look(m, g.id, run);
         let (app_name, ver, new, new_style) = app_cells(m, g.id);
+        let (state, state_style) = match g.status {
+            Status::Running => ("running", Style::new().fg(Color::Green)),
+            Status::Stopped => ("stopped", DIM),
+            Status::Other => ("other", Style::new().fg(Color::Yellow)),
+        };
         let base = if run { Style::new() } else { DIM };
         Row::new([
             Cell::from(g.id.to_string()),
             Cell::from(if g.kind == Kind::Lxc { "ct" } else { "vm" }),
             Cell::from(g.name.clone()),
+            Cell::from(state).style(state_style),
             Cell::from(if run { pct(g.cpu * 100.0) } else { String::new() }),
             Cell::from(format!("{}/{}", bytes(g.mem), bytes(g.maxmem))),
             Cell::from(swap).style(swap_style),
             Cell::from(if run { format!("{}/{}", bytes(rate.rx as u64), bytes(rate.tx as u64)) } else { String::new() }),
-            Cell::from(if run { age(g.uptime) } else { "stopped".into() }),
+            Cell::from(if run { age(g.uptime) } else { String::new() }),
             Cell::from(app_name),
             Cell::from(ver),
             Cell::from(new).style(new_style),
@@ -137,12 +143,13 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         ])
         .style(base)
     });
-    let head = Row::new(["ID", "", "NAME", "CPU", "MEM", "SWAP", "NET in/out /s", "UP", "APP", "VER", "NEW", "OS", "UPD", "TAGS"])
+    let head = Row::new(["ID", "", "NAME", "STATE", "CPU", "MEM", "SWAP", "NET in/out /s", "UP", "APP", "VER", "NEW", "OS", "UPD", "TAGS"])
         .style(Style::new().add_modifier(Modifier::BOLD));
     let widths = [
         Constraint::Length(6),
         Constraint::Length(2),
         Constraint::Min(12),
+        Constraint::Length(8),
         Constraint::Length(7),
         Constraint::Length(13),
         Constraint::Length(11),
@@ -534,6 +541,16 @@ mod tests {
         let mut a = app(View::Guests);
         a.confirm = Some(crate::Ask { id: 101, name: "web".into(), kind: Kind::Lxc, power: yagura_core::proxmox::Power::Reboot });
         assert!(text(&render(&a)).contains("reboot 101 web (y/n)"));
+    }
+
+    #[test]
+    fn the_table_has_a_state_column() {
+        let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        term.draw(|f| draw(f, &app(View::Guests))).unwrap();
+        let b = term.backend().buffer().clone();
+        let t = text(&b);
+        assert!(t.contains("STATE") && t.contains("running"));
+        assert!(b.content().iter().any(|c| c.symbol() == "r" && c.fg == Color::Green));
     }
 
     #[test]
