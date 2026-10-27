@@ -148,7 +148,7 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::styled("reboot required", RED));
         }
     } else {
-        lines.push(Line::styled("Enter: look inside (pct exec, about 10 s)", DIM));
+        lines.push(Line::styled("Enter: look inside (pct exec)", DIM));
     }
     let title = format!(" {} {} ", g.id, g.name);
     f.render_widget(Paragraph::new(lines).block(Block::new().borders(Borders::TOP).title(title)), area);

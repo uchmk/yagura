@@ -16,6 +16,9 @@ use yagura_core::proxmox::{self, Cluster, Inside, Status};
 use model::{Model, Sort, View};
 
 const PVE_EVERY: Duration = Duration::from_secs(5);
+/// How many `pct exec` run at once when the containers are looked into in the
+/// background.
+const PARALLEL: usize = 4;
 const SAMPLE: Duration = Duration::from_secs(1);
 
 pub struct App {
@@ -91,6 +94,7 @@ fn run(
                 }
             }
         }
+        prefetch(app, jobs_tx);
         let rows = match app.view {
             View::Guests => app.model.cluster.guests.len(),
             View::Procs => app.model.procs.len(),
@@ -125,8 +129,8 @@ fn run(
     }
 }
 
-/// Start `pct exec` on the selected running container, unless one is already
-/// going for it.
+/// Start `pct exec` on the selected running container (again, if it was
+/// looked into before), unless one is already going for it.
 fn look_inside(app: &mut App, tx: &Sender<Job>) {
     let Some(g) = app.model.guests(app.sort).get(app.selected).map(|g| (g.id, g.kind, g.status)) else { return };
     let (id, kind, status) = g;
@@ -134,11 +138,33 @@ fn look_inside(app: &mut App, tx: &Sender<Job>) {
         app.status = "pct exec needs a running container".into();
         return;
     }
-    if app.model.looking.contains(&id) {
+    app.status.clear();
+    start_inspect(&mut app.model, id, tx);
+}
+
+/// Look into every running container nobody has looked into yet, a few at a
+/// time, so the pane is already filled when the cursor gets there.
+fn prefetch(app: &mut App, tx: &Sender<Job>) {
+    let m = &app.model;
+    let todo: Vec<u32> = m
+        .cluster
+        .guests
+        .iter()
+        .filter(|g| g.kind == proxmox::Kind::Lxc && g.status == Status::Running && !g.template)
+        .map(|g| g.id)
+        .filter(|id| !m.inside.contains_key(id) && !m.looking.contains(id))
+        .take(PARALLEL.saturating_sub(m.looking.len()))
+        .collect();
+    for id in todo {
+        start_inspect(&mut app.model, id, tx);
+    }
+}
+
+fn start_inspect(m: &mut Model, id: u32, tx: &Sender<Job>) {
+    if m.looking.contains(&id) {
         return;
     }
-    app.status.clear();
-    app.model.looking.push(id);
+    m.looking.push(id);
     let tx = tx.clone();
     std::thread::Builder::new()
         .name("yagura-inspect".into())
