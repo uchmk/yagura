@@ -6,6 +6,13 @@
 
 ## [未リリース]
 
+## [0.73.47] - 2026-10-28
+
+### 変更
+
+- コンテナの APP・VER・NEW を、community-scripts のインストーラのファイルが無いコンテナでも出す。nginx・postgresql・redis・couchdb などの主なサービスの dpkg の版、
+  動いている docker のイメージの数値のタグ、`/opt/couchdb` の版も読む（インストーラのファイルが先）。NEW は `REPOS` にあるアプリだけ（couchdb・caddy・mosquitto・influxdb を足した）。
+
 ## [0.73.46] - 2026-10-28
 
 ### 変更

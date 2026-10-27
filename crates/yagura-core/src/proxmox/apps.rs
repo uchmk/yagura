@@ -48,6 +48,10 @@ const REPOS: &[(&str, &str)] = &[
     ("linkwarden", "linkwarden/linkwarden"),
     ("ollama", "ollama/ollama"),
     ("openwebui", "open-webui/open-webui"),
+    ("couchdb", "apache/couchdb"),
+    ("caddy", "caddyserver/caddy"),
+    ("mosquitto", "eclipse-mosquitto/mosquitto"),
+    ("influxdb", "influxdata/influxdb"),
 ];
 
 /// An app's name as the table above spells it: lower case, letters and digits only.
@@ -61,23 +65,51 @@ pub fn repo(app: &str) -> Option<&'static str> {
     REPOS.iter().find(|(n, _)| *n == key).map(|(_, r)| *r)
 }
 
-/// Shell script that prints `path:first line` for the installer's files.
-pub const FIND: &str =
-    r#"for f in /root/.[a-zA-Z]* /opt/*_version.txt; do [ -f "$f" ] && printf '%s:%s\n' "$f" "$(head -n 1 "$f" | head -c 64)"; done"#;
+/// Shell script that prints what a container runs: `path:first line` for the installer's files, then
+/// `dpkg:<package>:<version>` for well-known services, `docker:<image>[:<tag>]` for running containers
+/// and `couchdb:<version>` for a CouchDB unpacked under `/opt`.
+pub const FIND: &str = r#"for f in /root/.[a-zA-Z]* /opt/*_version.txt; do [ -f "$f" ] && printf '%s:%s\n' "$f" "$(head -n 1 "$f" | head -c 64)"; done
+for p in nginx apache2 postgresql mariadb-server mysql-server redis-server couchdb grafana prometheus caddy mosquitto influxdb docker-ce nodejs; do v=$(dpkg-query -W -f '${Version}' $p 2>/dev/null) && [ -n "$v" ] && printf 'dpkg:%s:%s\n' "$p" "$v"; done
+command -v docker >/dev/null 2>&1 && docker ps --format '{{.Image}}' 2>/dev/null | while read -r i; do printf 'docker:%s\n' "$i"; done
+[ -f /opt/couchdb/releases/start_erl.data ] && printf 'couchdb:%s\n' "$(cut -d' ' -f2 /opt/couchdb/releases/start_erl.data)"
+true"#;
+
+/// A Debian version as the upstream one: no epoch (`1:`) and no packaging revision (`-1~bookworm`).
+fn upstream(v: &str) -> &str {
+    let v = v.split_once(':').map_or(v, |(_, r)| r);
+    v.split(['-', '+', '~']).next().unwrap_or(v)
+}
 
 /// `(app, version)` from the output of [`FIND`]; a file whose first line is
-/// not a version (`.bashrc`, `.profile`) is not an app.
+/// not a version (`.bashrc`, `.profile`) is not an app, nor is an image without a numeric tag.
 pub fn parse_found(text: &str) -> Vec<(String, String)> {
-    text.lines()
-        .filter_map(|l| {
-            let (path, ver) = l.split_once(':')?;
-            let file = path.rsplit('/').next()?;
-            let name = file.strip_prefix('.').or_else(|| file.strip_suffix("_version.txt"))?;
-            let ver = ver.trim();
-            numbers(ver)?;
-            Some((name.to_string(), ver.to_string()))
-        })
-        .collect()
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut add = |name: &str, ver: &str| {
+        let ver = ver.trim();
+        if numbers(ver).is_some() && !out.iter().any(|(n, _)| key(n) == key(name)) {
+            out.push((name.to_string(), ver.to_string()));
+        }
+    };
+    for l in text.lines() {
+        if let Some(r) = l.strip_prefix("dpkg:") {
+            if let Some((name, ver)) = r.split_once(':') {
+                add(name, upstream(ver));
+            }
+        } else if let Some(r) = l.strip_prefix("docker:") {
+            // `ghcr.io/immich-app/immich-server:v1.2` is `immich-server` at `v1.2`.
+            if let Some((image, tag)) = r.rsplit_once(':').filter(|(_, t)| !t.contains('/')) {
+                add(image.rsplit('/').next().unwrap_or(image), tag);
+            }
+        } else if let Some(ver) = l.strip_prefix("couchdb:") {
+            add("couchdb", ver);
+        } else if let Some((path, ver)) = l.split_once(':') {
+            let file = path.rsplit('/').next().unwrap_or("");
+            if let Some(name) = file.strip_prefix('.').or_else(|| file.strip_suffix("_version.txt")) {
+                add(name, ver);
+            }
+        }
+    }
+    out
 }
 
 /// The dotted numbers of a version (`v3.3.5` is `[3, 3, 5]`); `None` if it
@@ -157,6 +189,16 @@ pub fn latest(app: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn services_and_docker_images_become_apps() {
+        let out = "dpkg:nginx:1.22.1-9+deb12u1\ndpkg:redis-server:5:7.0.15-1~deb12u2\ndocker:ghcr.io/immich-app/immich-server:v1.2.3\ndocker:redis:latest\ndocker:localhost:5000/web:2.0\ncouchdb:3.5.0\n";
+        assert_eq!(
+            parse_found(out),
+            [("nginx", "1.22.1"), ("redis-server", "7.0.15"), ("immich-server", "v1.2.3"), ("web", "2.0"), ("couchdb", "3.5.0")]
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        );
+    }
 
     #[test]
     fn installer_files_become_apps_and_dotfiles_do_not() {
