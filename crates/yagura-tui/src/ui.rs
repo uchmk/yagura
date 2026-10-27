@@ -57,6 +57,19 @@ fn pct(v: f32) -> String {
 
 fn header(f: &mut Frame, app: &App, area: Rect) {
     let m = &app.model;
+    if let View::Graph(id) = app.view
+        && let Some(g) = m.guests(app.sort).into_iter().find(|g| g.id == id)
+    {
+        let swap = g.swap.map_or("-".to_string(), |s| s.max.map_or(bytes(s.used), |max| format!("{}/{}", bytes(s.used), bytes(max))));
+        let l1 = Line::from(vec![
+            Span::styled(format!(" {} {} ", g.id, g.name), Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("cpu {}", pct(g.cpu * 100.0))),
+        ]);
+        let l2 = Line::from(format!(" mem {}/{}  swap {swap}  disk {}/{}", bytes(g.mem), bytes(g.maxmem), bytes(g.disk), bytes(g.maxdisk)));
+        let l3 = Line::styled(format!(" on {}", m.host), DIM);
+        f.render_widget(Paragraph::new(vec![l1, l2, l3]), area);
+        return;
+    }
     let swap_red = m.mem.swap_total > 0 && m.mem.swap_used * 10 >= m.mem.swap_total * 9;
     let load = m.load.map_or(String::new(), |(a, b, c)| format!("  load {a:.2} {b:.2} {c:.2}"));
     let l1 = Line::from(vec![
