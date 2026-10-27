@@ -1,5 +1,7 @@
 //! Drawing. Colours are the terminal's own: red for what needs a look (swap
-//! near its limit, a failed read), reverse video for the selection. Only
+//! near its limit, a failed read), a blue background for the selection (not
+//! reverse video: where the terminal's default colours coincide, the text of
+//! a reversed row vanishes). Only
 //! ASCII symbols: some terminals draw "ambiguous width" ones (arrows, `…`)
 //! two columns wide, which leaves stale cells behind when the view changes.
 
@@ -14,6 +16,7 @@ use crate::App;
 use crate::model::{View, age, bytes};
 
 const RED: Style = Style::new().fg(Color::Red);
+const SELECTED: Style = Style::new().bg(Color::Blue).add_modifier(Modifier::BOLD);
 const DIM: Style = Style::new().fg(Color::DarkGray);
 
 pub fn draw(f: &mut Frame, app: &App) {
@@ -103,10 +106,7 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Min(6),
     ];
     let title = format!(" guests (sort: {}) ", app.sort.label());
-    let t = Table::new(rows, widths)
-        .header(head)
-        .block(Block::new().borders(Borders::TOP).title(title))
-        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    let t = Table::new(rows, widths).header(head).block(Block::new().borders(Borders::TOP).title(title)).row_highlight_style(SELECTED);
     let mut st = TableState::default().with_selected(Some(app.selected));
     f.render_stateful_widget(t, area, &mut st);
 }
@@ -127,7 +127,7 @@ fn procs(f: &mut Frame, app: &App, area: Rect) {
     let t = Table::new(rows, widths)
         .header(head)
         .block(Block::new().borders(Borders::TOP).title(" processes (this host) "))
-        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+        .row_highlight_style(SELECTED);
     let mut st = TableState::default().with_selected(Some(app.selected));
     f.render_stateful_widget(t, area, &mut st);
 }

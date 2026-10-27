@@ -1,6 +1,6 @@
 [package]
 name = "yagura-tui"
-version = "0.73.34"
+version = "0.73.35"
 edition = "2024"
 rust-version = "1.95"
 description = "yagura in the terminal: the host and its Proxmox VE guests on one screen"
