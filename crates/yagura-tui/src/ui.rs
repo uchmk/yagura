@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table, T
 use yagura_core::proxmox::{Kind, Note, Status, apps};
 
 use crate::App;
-use crate::model::{Model, View, age, bytes};
+use crate::model::{DISK_FULL, Model, View, age, bytes, disk_pct};
 use yagura_core::proxmox::rrd::Point;
 
 const RED: Style = Style::new().fg(Color::Red);
@@ -49,6 +49,47 @@ pub fn draw(f: &mut Frame, app: &App) {
         inside(f, app, detail);
     }
     footer(f, app, foot);
+    if app.help {
+        help(f);
+    }
+}
+
+/// The key list and what the marks mean, over everything else.
+fn help(f: &mut Frame) {
+    const LINES: [&str; 26] = [
+        "KEYS",
+        "  Tab        switch view: host / guests / this machine's processes",
+        "  j k        move down / up      g G  top / bottom",
+        "  /          find a guest by name or id (Enter keep, Esc clear)",
+        "  s          sort: id, cpu, mem, swap, problems (worst first)",
+        "  Enter      open a guest: graphs and the processes inside it",
+        "  Esc        back from a guest",
+        "  u          install the waiting updates in the guest (asks first)",
+        "  o d r      start / shut down / reboot the guest (asks first)",
+        "  q          quit",
+        "",
+        "MARKS",
+        "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
+        "  UPD 3+1h   1 more package is held on purpose (apt-mark hold)",
+        "  red SWAP   swap is nearly full: the guest lacks memory",
+        "  red DISK   the root disk is 90% full: updates may fail",
+        "  red NEW    a newer version of the app exists (NEW column)",
+        "  gray row   the guest is stopped",
+        "",
+        "The screen only reads. Nothing changes until you press y.",
+        "",
+        "PROBLEMS sort puts first: swap full, disk full (2 each),",
+        "  reboot wanted, updates waiting (1 each).",
+        "",
+        "Press any key to close.",
+        "",
+    ];
+    let area = f.area();
+    let w = 70.min(area.width);
+    let h = (LINES.len() as u16 + 2).min(area.height);
+    let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    f.render_widget(ratatui::widgets::Clear, r);
+    f.render_widget(Paragraph::new(LINES.iter().map(|l| Line::raw(*l)).collect::<Vec<_>>()).block(Block::bordered().title(" help ")), r);
 }
 
 fn pct(v: f32) -> String {
@@ -123,6 +164,10 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
             Status::Stopped => ("stopped", DIM),
             Status::Other => ("other", Style::new().fg(Color::Yellow)),
         };
+        let (disk, disk_style) = match disk_pct(g) {
+            Some(p) => (format!("{p:3.0}%"), if p >= DISK_FULL { RED.add_modifier(Modifier::BOLD) } else { Style::new() }),
+            None => (String::new(), DIM),
+        };
         let base = if run { Style::new() } else { DIM };
         Row::new([
             Cell::from(g.id.to_string()),
@@ -131,6 +176,7 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
             Cell::from(state).style(state_style),
             Cell::from(if run { pct(g.cpu * 100.0) } else { String::new() }),
             Cell::from(format!("{}/{}", bytes(g.mem), bytes(g.maxmem))),
+            Cell::from(disk).style(disk_style),
             Cell::from(swap).style(swap_style),
             Cell::from(if run { format!("{}/{}", bytes(rate.rx as u64), bytes(rate.tx as u64)) } else { String::new() }),
             Cell::from(if run { age(g.uptime) } else { String::new() }),
@@ -143,8 +189,25 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         ])
         .style(base)
     });
-    let head = Row::new(["ID", "", "NAME", "STATE", "CPU", "MEM", "SWAP", "NET in/out /s", "UP", "APP", "VER", "NEW", "OS", "UPD", "TAGS"])
-        .style(Style::new().add_modifier(Modifier::BOLD));
+    let head = Row::new([
+        "ID",
+        "",
+        "NAME",
+        "STATE",
+        "CPU",
+        "MEM",
+        "DISK",
+        "SWAP",
+        "NET in/out /s",
+        "UP",
+        "APP",
+        "VER",
+        "NEW",
+        "OS",
+        "UPD",
+        "TAGS",
+    ])
+    .style(Style::new().add_modifier(Modifier::BOLD));
     let widths = [
         Constraint::Length(6),
         Constraint::Length(2),
@@ -152,6 +215,7 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(8),
         Constraint::Length(7),
         Constraint::Length(13),
+        Constraint::Length(5),
         Constraint::Length(11),
         Constraint::Length(16),
         Constraint::Length(8),
@@ -162,7 +226,19 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(5),
         Constraint::Min(6),
     ];
-    let title = format!(" guests (sort: {}) ", app.sort.label());
+    let (total, running, updates, reboot) = m.summary();
+    let find = if app.filtering {
+        format!("  find: {}_", m.filter)
+    } else if m.filter.is_empty() {
+        String::new()
+    } else {
+        format!("  find: {}", m.filter)
+    };
+    let title = format!(
+        " guests: {total}, {running} running, {} stopped, {updates} with updates, {reboot} need reboot  (sort: {}){find} ",
+        total - running,
+        app.sort.label()
+    );
     let t = Table::new(rows, widths).header(head).block(Block::new().borders(Borders::TOP).title(title)).row_highlight_style(SELECTED);
     let mut st = TableState::default().with_selected(Some(app.selected));
     f.render_stateful_widget(t, area, &mut st);
@@ -286,17 +362,28 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
 
 fn footer(f: &mut Frame, app: &App, area: Rect) {
     if let Some(a) = &app.confirm {
-        let q = format!(" {} {} {} (y/n) ", a.power.verb(), a.id, a.name);
+        let note = if a.note.is_empty() { String::new() } else { format!(" - {}", a.note) };
+        let q = format!(" {} {} {}{note} (y/n) ", a.power.verb(), a.id, a.name);
         f.render_widget(Paragraph::new(q).style(RED.add_modifier(Modifier::BOLD)), area);
         return;
     }
+    if app.filtering {
+        f.render_widget(Paragraph::new(" type a name or id  Enter keep  Esc clear").style(DIM), area);
+        return;
+    }
     let keys = match app.view {
-        View::Host => " Tab guests  q quit",
-        View::Guests => " Tab view  j/k move  s sort  Enter graphs  o start  d shutdown  r reboot  q quit",
-        View::Procs => " Tab host  j/k move  q quit",
-        View::Graph(_) => " Esc back  j/k move  u upgrade  q quit",
+        View::Host => " Tab guests  ? help  q quit",
+        View::Guests => " Tab view  j/k move  / find  s sort  Enter graphs  u upgrade  o start  d shutdown  r reboot  ? help  q quit",
+        View::Procs => " Tab host  j/k move  ? help  q quit",
+        View::Graph(_) => " Esc back  j/k move  u upgrade  ? help  q quit",
     };
-    let text = if app.status.is_empty() { keys.to_string() } else { format!("{keys}   {}", app.status) };
+    let mut text = keys.to_string();
+    if let Some((id, p, since)) = app.busy.first() {
+        text = format!("{text}   {id}: {}... {}s{}", p.verb(), since.elapsed().as_secs(), if app.busy.len() > 1 { " (+more)" } else { "" });
+    }
+    if !app.status.is_empty() {
+        text = format!("{text}   {}", app.status);
+    }
     f.render_widget(Paragraph::new(text).style(DIM), area);
 }
 
@@ -515,11 +602,14 @@ mod tests {
             procs_at: None,
             procs_busy: false,
             guest_sel: 0,
+            help: false,
+            filtering: false,
+            busy: vec![],
         }
     }
 
     fn render(a: &App) -> Buffer {
-        let mut t = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        let mut t = Terminal::new(TestBackend::new(170, 29)).unwrap();
         t.draw(|f| draw(f, a)).unwrap();
         t.backend().buffer().clone()
     }
@@ -539,7 +629,13 @@ mod tests {
     #[test]
     fn a_pending_power_change_asks_in_the_footer() {
         let mut a = app(View::Guests);
-        a.confirm = Some(crate::Ask { id: 101, name: "web".into(), kind: Kind::Lxc, power: yagura_core::proxmox::Power::Reboot });
+        a.confirm = Some(crate::Ask {
+            id: 101,
+            name: "web".into(),
+            kind: Kind::Lxc,
+            power: yagura_core::proxmox::Power::Reboot,
+            note: String::new(),
+        });
         assert!(text(&render(&a)).contains("reboot 101 web (y/n)"));
     }
 
@@ -556,8 +652,38 @@ mod tests {
     #[test]
     fn a_pending_upgrade_asks_in_the_footer() {
         let mut a = app(View::Guests);
-        a.confirm = Some(crate::Ask { id: 101, name: "web".into(), kind: Kind::Lxc, power: yagura_core::proxmox::Power::Upgrade });
-        assert!(text(&render(&a)).contains("upgrade 101 web (y/n)"));
+        a.confirm = Some(crate::Ask {
+            id: 101,
+            name: "web".into(),
+            kind: Kind::Lxc,
+            power: yagura_core::proxmox::Power::Upgrade,
+            note: "installs 5 updates, 1.2G free".into(),
+        });
+        assert!(text(&render(&a)).contains("upgrade 101 web - installs 5 updates, 1.2G free (y/n)"));
+    }
+
+    #[test]
+    fn the_help_lists_the_keys_and_the_marks() {
+        let mut a = app(View::Guests);
+        a.help = true;
+        let t = text(&render(&a));
+        assert!(t.contains("KEYS") && t.contains("MARKS") && t.contains("Press any key"));
+    }
+
+    #[test]
+    fn the_title_counts_guests_and_the_upgrade_question_says_what_it_does() {
+        let mut a = app(View::Guests);
+        a.confirm = Some(crate::Ask {
+            id: 101,
+            name: "web".into(),
+            kind: Kind::Lxc,
+            power: yagura_core::proxmox::Power::Shutdown,
+            note: "stops it; connected users are cut off".into(),
+        });
+        let t = text(&render(&a));
+        assert!(t.contains("connected users are cut off"));
+        a.confirm = None;
+        assert!(text(&render(&a)).contains("running"));
     }
 
     #[test]
@@ -591,7 +717,7 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        let mut t = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        let mut t = Terminal::new(TestBackend::new(170, 29)).unwrap();
         for s in (0..300).chain((0..300).rev()) {
             a.selected = s;
             t.draw(|f| draw(f, &a)).unwrap();

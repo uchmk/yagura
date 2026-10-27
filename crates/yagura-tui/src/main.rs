@@ -14,7 +14,7 @@ use yagura_core::Msg;
 use yagura_core::proxmox::rrd::Point;
 use yagura_core::proxmox::{self, Cluster, Inside, Power, Status};
 
-use model::{Model, Sort, View};
+use model::{Model, Sort, View, bytes};
 
 const PVE_EVERY: Duration = Duration::from_secs(5);
 /// How often the graphs on screen are read again (the history has a point a minute).
@@ -41,6 +41,12 @@ pub struct App {
     pub procs_busy: bool,
     /// The guest row that was selected when it was entered.
     pub guest_sel: usize,
+    /// The key list is up.
+    pub help: bool,
+    /// Keys go to the name filter.
+    pub filtering: bool,
+    /// Power changes running now, with when they began.
+    pub busy: Vec<(u32, Power, Instant)>,
 }
 
 /// What the user asked of a guest, shown until they answer.
@@ -50,6 +56,8 @@ pub struct Ask {
     pub name: String,
     pub kind: proxmox::Kind,
     pub power: Power,
+    /// What it will do, in a few words (shown with the question).
+    pub note: String,
 }
 
 enum Job {
@@ -69,7 +77,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter graphs  Esc back  u upgrade  o start  d shutdown  r reboot  q quit",
+            "yagura-tui {}\n\nkeys: Tab view  j/k move  / find  s sort  Enter graphs  Esc back  u upgrade  o start  d shutdown  r reboot  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -90,6 +98,9 @@ fn main() -> std::io::Result<()> {
         procs_at: None,
         procs_busy: false,
         guest_sel: 0,
+        help: false,
+        filtering: false,
+        busy: vec![],
     };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
@@ -153,6 +164,7 @@ fn run(
                     app.model.guest_procs.insert(id, p);
                 }
                 Job::Power(id, p, r) => {
+                    app.busy.retain(|b| b.0 != id);
                     if r.is_ok()
                         && matches!(p, Power::Upgrade)
                         && let Some(g) = app.model.cluster.guests.iter().find(|g| g.id == id)
@@ -171,7 +183,7 @@ fn run(
         refresh_rrd(app, jobs_tx);
         refresh_procs(app, jobs_tx);
         let rows = match app.view {
-            View::Guests => app.model.cluster.guests.len(),
+            View::Guests => app.model.guests(app.sort).len(),
             View::Graph(id) => app.model.guest_procs.get(&id).and_then(|p| p.as_ref()).map_or(0, Vec::len),
             View::Procs => app.model.procs.len(),
             View::Host => 0,
@@ -188,7 +200,25 @@ fn run(
             continue;
         }
         match k.code {
+            _ if app.help => app.help = false,
+            _ if app.filtering => {
+                match k.code {
+                    KeyCode::Char(c) => app.model.filter.push(c),
+                    KeyCode::Backspace => {
+                        app.model.filter.pop();
+                    }
+                    KeyCode::Esc => {
+                        app.model.filter.clear();
+                        app.filtering = false;
+                    }
+                    KeyCode::Enter => app.filtering = false,
+                    _ => {}
+                }
+                app.selected = 0;
+            }
             _ if app.confirm.is_some() => answer(app, k.code, jobs_tx),
+            KeyCode::Char('?') => app.help = true,
+            KeyCode::Char('/') if app.view == View::Guests => app.filtering = true,
             KeyCode::Char('o') if app.view == View::Guests => ask(app, Power::Start),
             KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
             KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
@@ -240,8 +270,31 @@ fn ask(app: &mut App, power: Power) {
         return;
     }
     app.status.clear();
-    app.confirm = Some(Ask { id, name, kind, power });
+    let note = impact(&app.model, id, power);
+    app.confirm = Some(Ask { id, name, kind, power, note });
 }
+
+/// What a power change does, for the question: who is cut off, or how many
+/// updates will go in and whether the disk has room for them.
+fn impact(m: &Model, id: u32, power: Power) -> String {
+    match power {
+        Power::Start => String::new(),
+        Power::Shutdown => "stops it; connected users are cut off".into(),
+        Power::Reboot => "restarts it; connected users are cut off".into(),
+        Power::Upgrade => {
+            let n =
+                m.inside.get(&id).and_then(|i| i.upgradable).map_or("updates of unknown number".to_string(), |n| format!("{n} updates"));
+            let free = m.cluster.guests.iter().find(|g| g.id == id).filter(|g| g.maxdisk > 0).map(|g| {
+                let low = g.maxdisk.saturating_sub(g.disk) < LOW_FREE || model::disk_pct(g).is_some_and(|p| p >= model::DISK_FULL);
+                format!(", {} free{}", bytes(g.maxdisk.saturating_sub(g.disk)), if low { " - LOW, may fail" } else { "" })
+            });
+            format!("installs {n}{}", free.unwrap_or_default())
+        }
+    }
+}
+
+/// Less free space than this on the root disk warns before an upgrade.
+const LOW_FREE: u64 = 512 * 1024 * 1024;
 
 /// The answer to a pending question: `y` runs it on a thread of its own, any
 /// other key drops it.
@@ -251,7 +304,8 @@ fn answer(app: &mut App, key: KeyCode, tx: &Sender<Job>) {
         app.status = "cancelled".into();
         return;
     }
-    app.status = format!("{}: {}...", a.id, a.power.verb());
+    app.status.clear();
+    app.busy.push((a.id, a.power, Instant::now()));
     let tx = tx.clone();
     std::thread::Builder::new()
         .name("yagura-power".into())

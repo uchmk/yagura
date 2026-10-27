@@ -24,6 +24,8 @@ pub enum Sort {
     Cpu,
     Mem,
     Swap,
+    /// Guests with something to do first (swap full, disk full, reboot wanted, updates waiting).
+    Problems,
 }
 
 impl Sort {
@@ -32,7 +34,8 @@ impl Sort {
             Sort::Id => Sort::Cpu,
             Sort::Cpu => Sort::Mem,
             Sort::Mem => Sort::Swap,
-            Sort::Swap => Sort::Id,
+            Sort::Swap => Sort::Problems,
+            Sort::Problems => Sort::Id,
         }
     }
 
@@ -42,9 +45,13 @@ impl Sort {
             Sort::Cpu => "cpu",
             Sort::Mem => "mem",
             Sort::Swap => "swap",
+            Sort::Problems => "problems",
         }
     }
 }
+
+/// The root disk is called full from here (percent).
+pub const DISK_FULL: f64 = 90.0;
 
 /// Bytes per second of the two directions of a guest's network.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -77,6 +84,8 @@ pub struct Model {
     pub guest_rrd: HashMap<u32, Vec<Point>>,
     /// What runs inside the guest being looked at; `None` when it can not be asked.
     pub guest_procs: HashMap<u32, Option<Vec<yagura_core::proxmox::GuestProc>>>,
+    /// Only the guests whose name or id contains this (case-blind); empty shows all.
+    pub filter: String,
     last: HashMap<u32, (u64, u64, Instant)>,
 }
 
@@ -104,7 +113,13 @@ impl Model {
     /// The guests in the order `sort` asks (templates last), biggest first
     /// except by id.
     pub fn guests(&self, sort: Sort) -> Vec<&Guest> {
-        let mut v: Vec<&Guest> = self.cluster.guests.iter().collect();
+        let needle = self.filter.to_lowercase();
+        let mut v: Vec<&Guest> = self
+            .cluster
+            .guests
+            .iter()
+            .filter(|g| needle.is_empty() || g.name.to_lowercase().contains(&needle) || g.id.to_string().contains(&needle))
+            .collect();
         let swap = |g: &Guest| g.swap.and_then(|s| s.fraction()).unwrap_or(-1.0);
         v.sort_by(|a, b| {
             a.template.cmp(&b.template).then_with(|| match sort {
@@ -112,9 +127,39 @@ impl Model {
                 Sort::Cpu => b.cpu.total_cmp(&a.cpu),
                 Sort::Mem => b.mem.cmp(&a.mem),
                 Sort::Swap => swap(b).total_cmp(&swap(a)),
+                Sort::Problems => self.problems(b).cmp(&self.problems(a)).then(a.id.cmp(&b.id)),
             })
         });
         v
+    }
+
+    /// How much a running guest wants attention: a full swap or disk counts
+    /// double, a wanted reboot or waiting updates once. Stopped guests are 0.
+    pub fn problems(&self, g: &Guest) -> u32 {
+        if g.status != yagura_core::proxmox::Status::Running || g.template {
+            return 0;
+        }
+        let mut n = 0;
+        if g.swap.is_some_and(|s| s.near_limit()) {
+            n += 2;
+        }
+        if disk_pct(g).is_some_and(|p| p >= DISK_FULL) {
+            n += 2;
+        }
+        if let Some(i) = self.inside.get(&g.id) {
+            n += u32::from(i.reboot_required) + u32::from(i.upgradable.unwrap_or(0) > 0);
+        }
+        n
+    }
+
+    /// `(guests, running, with updates waiting, wanting a reboot)` over the guests on show, templates left out.
+    pub fn summary(&self) -> (usize, usize, usize, usize) {
+        let list: Vec<&Guest> = self.guests(Sort::Id).into_iter().filter(|g| !g.template).collect();
+        let running = list.iter().filter(|g| g.status == yagura_core::proxmox::Status::Running).count();
+        let inside = |g: &&&Guest| self.inside.get(&g.id);
+        let updates = list.iter().filter(|g| inside(g).is_some_and(|i| i.upgradable.unwrap_or(0) > 0)).count();
+        let reboot = list.iter().filter(|g| inside(g).is_some_and(|i| i.reboot_required)).count();
+        (list.len(), running, updates, reboot)
     }
 
     /// The app of a guest to show: the first one with a known repository, else the first one. `(name, installed, latest)`.
@@ -145,6 +190,11 @@ impl Model {
         v.sort_by(|a, b| b.cpu.total_cmp(&a.cpu).then(b.mem.cmp(&a.mem)));
         v
     }
+}
+
+/// How full the root disk of a running guest is, in percent; `None` when Proxmox gives no size.
+pub fn disk_pct(g: &Guest) -> Option<f64> {
+    (g.status == yagura_core::proxmox::Status::Running && g.maxdisk > 0).then(|| g.disk as f64 * 100.0 / g.maxdisk as f64)
 }
 
 /// `1.5G`, `12M`, `300K`, `42B`: binary units, one decimal under 10.
@@ -203,6 +253,25 @@ mod tests {
         assert_eq!(m.rates[&1].rx, 0.0);
         m.set_cluster(Cluster::default(), t0 + Duration::from_secs(6));
         assert!(m.rates.is_empty());
+    }
+
+    #[test]
+    fn problems_sort_first_and_the_filter_and_summary_follow_what_is_shown() {
+        use yagura_core::proxmox::Status;
+        let mut m = Model::default();
+        let mk =
+            |id: u32, name: &str, disk| Guest { id, name: name.into(), status: Status::Running, disk, maxdisk: 100, ..Guest::default() };
+        m.cluster.guests = vec![mk(1, "alpha", 10), mk(2, "beta", 95), mk(3, "gamma", 10)];
+        m.inside.insert(3, Inside { upgradable: Some(4), reboot_required: true, ..Default::default() });
+        let ids = |m: &Model| m.guests(Sort::Problems).iter().map(|g| g.id).collect::<Vec<_>>();
+        // beta: full disk (2); gamma: updates + reboot (2); ties go by id.
+        assert_eq!(ids(&m), [2, 3, 1]);
+        assert_eq!(m.summary(), (3, 3, 1, 1));
+        m.filter = "AM".into();
+        assert_eq!(ids(&m), [3]);
+        assert_eq!(m.summary(), (1, 1, 1, 1));
+        m.filter = "2".into();
+        assert_eq!(ids(&m), [2]);
     }
 
     #[test]
