@@ -523,6 +523,17 @@ out once it is up and deleted when it closes. The front is the one every uchmk a
 Building yourself, `cargo build --release` makes `yagura-com.exe`: copy it to `yagura.com`
 beside `yagura.exe`.
 
+## Terminal version (Linux, Proxmox VE)
+
+`yagura-tui` (in `crates/yagura-tui`, built with the workspace) puts the host and its Proxmox VE guests on one screen: the host's
+cpu / memory / swap, and every guest from `pvesh` with its cpu, memory, swap (from the cgroup, red near the limit), network rate and
+uptime. `Tab` switches to the host's processes, `s` sorts, `Enter` looks inside a running container with `pct exec` (OS, packages,
+upgradable count, reboot required; `apt update` is never run). Run it as root on the host. It is not part of the release downloads yet.
+
+```sh
+cargo run --release -p yagura-tui
+```
+
 ## Building
 
 ```sh
