@@ -47,7 +47,11 @@ fn main() -> std::io::Result<()> {
 
     let mut app = App { model: Model::default(), view: View::Guests, sort: Sort::Id, selected: 0, status: String::new() };
     let mut term = ratatui::init();
+    // ratatui leaves the hardware cursor where the last cell was written;
+    // some terminals (Tera Term) show it as a block over the table.
+    let _ = term.hide_cursor();
     let r = run(&mut term, &mut app, &rx, &jobs, &jobs_tx);
+    let _ = term.show_cursor();
     ratatui::restore();
     r
 }
