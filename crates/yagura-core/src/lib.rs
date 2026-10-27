@@ -58,6 +58,7 @@ pub mod hw;
 pub mod net;
 #[cfg(windows)]
 mod pdh;
+pub mod proxmox;
 pub mod sensors;
 pub mod session;
 pub mod svc;
