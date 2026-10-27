@@ -334,6 +334,15 @@ fn guest_procs(f: &mut Frame, app: &App, id: u32, area: Rect) {
     f.render_stateful_widget(t, area, &mut st);
 }
 
+/// When a stopped guest last started, for the detail pane.
+fn last_run(at: Option<u64>) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    match at {
+        Some(t) => format!("stopped; last started {} ago (task log)", age(now.saturating_sub(t))),
+        None => "stopped; no start in the task log".into(),
+    }
+}
+
 /// The container under the cursor, as `pct exec` found it.
 fn inside(f: &mut Frame, app: &App, area: Rect) {
     let m = &app.model;
@@ -353,6 +362,8 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
         if i.reboot_required {
             lines.push(Line::styled("reboot required", RED));
         }
+    } else if g.status == Status::Stopped {
+        lines.push(Line::styled(last_run(m.last_start.get(&g.id).copied().flatten()), DIM));
     } else {
         lines.push(Line::styled("Enter: look inside (pct exec / qm guest exec)", DIM));
     }

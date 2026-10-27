@@ -84,6 +84,8 @@ pub struct Model {
     pub guest_rrd: HashMap<u32, Vec<Point>>,
     /// What runs inside the guest being looked at; `None` when it can not be asked.
     pub guest_procs: HashMap<u32, Option<Vec<yagura_core::proxmox::GuestProc>>>,
+    /// When each stopped guest last started successfully (Unix seconds); `None` once asked and not found.
+    pub last_start: HashMap<u32, Option<u64>>,
     /// Only the guests whose name or id contains this (case-blind); empty shows all.
     pub filter: String,
     last: HashMap<u32, (u64, u64, Instant)>,

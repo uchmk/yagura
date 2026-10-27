@@ -68,6 +68,8 @@ enum Job {
     HostRrd(Vec<Point>),
     GuestRrd(u32, Vec<Point>),
     GuestProcs(u32, Option<Vec<proxmox::GuestProc>>),
+    /// A stopped guest's last successful start from the task log (Unix seconds).
+    LastStart(u32, Option<u64>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -148,6 +150,9 @@ fn run(
                     }
                     app.model.inside.insert(id, i);
                 }
+                Job::LastStart(id, t) => {
+                    app.model.last_start.insert(id, t);
+                }
                 Job::Latest(key, tag) => {
                     app.model.latest.insert(key, tag);
                 }
@@ -180,6 +185,7 @@ fn run(
             }
         }
         prefetch(app, jobs_tx);
+        prefetch_starts(app, jobs_tx);
         refresh_rrd(app, jobs_tx);
         refresh_procs(app, jobs_tx);
         let rows = match app.view {
@@ -376,6 +382,29 @@ fn prefetch(app: &mut App, tx: &Sender<Job>) {
         .collect();
     for (id, kind) in todo {
         start_inspect(&mut app.model, id, kind, tx);
+    }
+}
+
+/// Read the last start of every stopped guest once, and again when it is seen
+/// running (so a job that wakes a guest weekly and stops it shows its last run).
+fn prefetch_starts(app: &mut App, tx: &Sender<Job>) {
+    let m = &mut app.model;
+    let todo: Vec<(u32, String)> = m
+        .cluster
+        .guests
+        .iter()
+        .filter(|g| g.status == Status::Stopped && !g.template && !m.last_start.contains_key(&g.id))
+        .map(|g| (g.id, g.node.clone()))
+        .collect();
+    for (id, node) in todo {
+        m.last_start.insert(id, None);
+        let tx = tx.clone();
+        std::thread::Builder::new()
+            .name("yagura-starts".into())
+            .spawn(move || {
+                let _ = tx.send(Job::LastStart(id, proxmox::last_start(&node, id)));
+            })
+            .expect("spawn the starts thread");
     }
 }
 

@@ -365,6 +365,27 @@ pub fn power(kind: Kind, id: u32, p: Power) -> Result<(), String> {
     Err(err.lines().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim().to_string())
 }
 
+/// When the guest was last started successfully (Unix seconds), from the node's task log. This is how a guest
+/// that is stopped after its weekly job (a backup container) shows when it last ran, though Proxmox lists no
+/// backup for it. Runs `pvesh`: call it from a thread of its own. `None` when the log no longer has one.
+pub fn last_start(node: &str, id: u32) -> Option<u64> {
+    let o = Command::new("pvesh")
+        .args(["get", &format!("/nodes/{node}/tasks"), "--vmid", &id.to_string(), "--limit", "50", "--output-format", "json"])
+        .output()
+        .ok()?;
+    o.status.success().then(|| parse_last_start(&String::from_utf8_lossy(&o.stdout))).flatten()
+}
+
+/// The newest successful start in a task list (`vzstart` / `qmstart`).
+pub fn parse_last_start(json: &str) -> Option<u64> {
+    let v: Value = serde_json::from_str(json).ok()?;
+    v.as_array()?
+        .iter()
+        .filter(|t| matches!(t["type"].as_str(), Some("vzstart" | "qmstart")) && t["status"].as_str() == Some("OK"))
+        .filter_map(|t| t["starttime"].as_u64())
+        .max()
+}
+
 /// `apt-get update` and `apt-get upgrade` inside a guest, without questions, and wait for them (call it from a
 /// thread of its own). The error is the last line the command said.
 pub fn upgrade(kind: Kind, id: u32) -> Result<(), String> {
@@ -442,6 +463,20 @@ mod tests {
       {"type":"qemu","vmid":100,"name":"vm","node":"pve","status":"stopped","cpu":0,"maxcpu":4,"mem":0,"maxmem":4096,"tags":"","template":1},
       {"type":"storage","storage":"local","node":"pve"}
     ]"#;
+
+    #[test]
+    fn the_last_start_is_the_newest_successful_one() {
+        let json = r#"[
+            {"type":"vzstart","status":"OK","starttime":300},
+            {"type":"vzstart","status":"OK","starttime":200},
+            {"type":"vzstart","status":"command failed","starttime":400},
+            {"type":"vzshutdown","status":"OK","starttime":500},
+            {"type":"qmstart","status":"OK","starttime":250}
+        ]"#;
+        assert_eq!(parse_last_start(json), Some(300));
+        assert_eq!(parse_last_start("[]"), None);
+        assert_eq!(parse_last_start("not json"), None);
+    }
 
     #[test]
     fn held_packages_are_not_upgrades() {

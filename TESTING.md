@@ -305,6 +305,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.8 | `?` opens a key list with what the marks mean (UPD `3*`, `0+1h`, red SWAP / DISK / NEW); any key closes it. The guests table title counts guests (running / stopped / with updates / need reboot) and the new DISK column goes red at 90% or more. |
 | 3p.9 | `/` then a few letters narrows the guests by name or id (Enter keeps, Esc clears); `s` cycles to `problems`, which puts guests with a full swap or disk, a wanted reboot or waiting updates first. |
 | 3p.10 | `d`, `r` and `u` ask with what they do (`stops it; connected users are cut off`, `installs 5 updates, 1.2G free`, and `LOW, may fail` when the root disk is 90% full or has under 512M); while `u` runs the footer counts the seconds. |
+| 3p.11 | a stopped guest's detail pane says `stopped; last started 3d ago (task log)` (or `no start in the task log`), read from `pvesh get /nodes/<node>/tasks --vmid ID`; the weekly backup container, stopped after its run, shows when it last ran. |
 
 
 ## 4. Resizing the columns
