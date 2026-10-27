@@ -172,6 +172,7 @@ fn look(m: &crate::model::Model, id: u32, running: bool) -> (String, String, Sty
         Some(i) if i.no_agent => ("no agent".into(), String::new(), DIM),
         Some(i) => {
             let n = i.upgradable.map_or("-".into(), |n| n.to_string());
+            let n = if i.held > 0 { format!("{n}+{}h", i.held) } else { n };
             let (n, style) = if i.reboot_required { (format!("{n}*"), RED) } else { (n, Style::new()) };
             (short_os(i.os.as_deref().unwrap_or("")), n, style)
         }
@@ -264,7 +265,8 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::raw(format!("os: {}", i.os.as_deref().unwrap_or("?"))));
         let n = |v: Option<u32>| v.map_or("?".into(), |v| v.to_string());
         let stale = i.lists_age.map_or(String::new(), |a| format!(" (apt lists {} old)", age(a)));
-        lines.push(Line::raw(format!("packages: {}   upgradable: {}{stale}", n(i.packages), n(i.upgradable))));
+        let held = if i.held > 0 { format!("   held: {}", i.held) } else { String::new() };
+        lines.push(Line::raw(format!("packages: {}   upgradable: {}{held}{stale}", n(i.packages), n(i.upgradable))));
         if i.reboot_required {
             lines.push(Line::styled("reboot required", RED));
         }

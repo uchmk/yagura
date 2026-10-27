@@ -229,6 +229,9 @@ pub struct Inside {
     pub packages: Option<u32>,
     /// Packages `apt` says can be upgraded, from the lists as they are.
     pub upgradable: Option<u32>,
+    /// Packages `apt-mark hold` keeps back on purpose: not counted in `upgradable`.
+    #[serde(default)]
+    pub held: u32,
     /// Seconds since the apt lists were fetched: how far to trust `upgradable`.
     pub lists_age: Option<u64>,
     pub reboot_required: bool,
@@ -252,6 +255,30 @@ pub fn count_packages(text: &str) -> u32 {
 /// (`Listing...`) and warnings are not packages.
 pub fn count_upgradable(text: &str) -> u32 {
     text.lines().filter(|l| l.contains("[upgradable from:")).count() as u32
+}
+
+const HOLD: &str = "---hold---\n";
+
+/// `apt list --upgradable` followed by `apt-mark showhold` after a [`HOLD`] line: `(upgradable, held)`. A held
+/// package is counted only as held.
+pub fn parse_upgradable(text: &str) -> (u32, u32) {
+    let (list, holds) = text.split_once(HOLD).unwrap_or((text, ""));
+    let holds: Vec<&str> = holds.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let (mut up, mut held) = (0, 0);
+    for l in list.lines().filter(|l| l.contains("[upgradable from:")) {
+        if holds.contains(&l.split('/').next().unwrap_or("")) {
+            held += 1;
+        } else {
+            up += 1;
+        }
+    }
+    (up, held)
+}
+
+/// The first `E:` line apt printed, else the last line said.
+fn apt_error(text: &str) -> Option<String> {
+    let line = text.lines().find(|l| l.starts_with("E:")).or_else(|| text.lines().rev().find(|l| !l.trim().is_empty()))?;
+    Some(line.trim().chars().take(80).collect())
 }
 
 /// The result of `qm guest exec`: its `out-data` when the command exited 0.
@@ -341,8 +368,9 @@ pub fn power(kind: Kind, id: u32, p: Power) -> Result<(), String> {
 /// `apt-get update` and `apt-get upgrade` inside a guest, without questions, and wait for them (call it from a
 /// thread of its own). The error is the last line the command said.
 pub fn upgrade(kind: Kind, id: u32) -> Result<(), String> {
-    const SCRIPT: &str =
-        "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get -y -qq -o Dpkg::Options::=--force-confold upgrade";
+    // Mend a half-installed state first, and clear the downloads after: a 4 GB root fills up.
+    const SCRIPT: &str = "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get -y -qq --fix-broken install && \
+         apt-get -y -qq -o Dpkg::Options::=--force-confold upgrade; rc=$?; apt-get clean; exit $rc";
     let o = match kind {
         Kind::Lxc => Command::new("pct").arg("exec").arg(id.to_string()).args(["--", "sh", "-c", SCRIPT]).output(),
         Kind::Qemu => {
@@ -359,8 +387,9 @@ pub fn upgrade(kind: Kind, id: u32) -> Result<(), String> {
         return Ok(());
     }
     let err = String::from_utf8_lossy(&o.stderr);
-    let say = |t: &str| t.lines().rev().find(|l| !l.trim().is_empty()).map(|l| l.trim().chars().take(80).collect::<String>());
-    Err(say(&err).or_else(|| say(&out)).unwrap_or_else(|| "failed".into()))
+    // An `E:` line says more than the last line (a dpkg trailer); a VM puts it in the JSON's `err-data`.
+    let text = format!("{err}\n{out}").replace("\\n", "\n");
+    Err(apt_error(&text).unwrap_or_else(|| "failed".into()))
 }
 
 /// Look inside a running guest. About two seconds per command, so call it
@@ -382,10 +411,13 @@ pub fn inspect(kind: Kind, id: u32) -> Inside {
             name.or_else(|| exec(kind, id, &["cat", "/etc/os-release"]).and_then(|t| parse_os_release(&t)))
         }
     };
+    let up = exec(kind, id, &["sh", "-c", "apt list --upgradable 2>/dev/null; echo ---hold---; apt-mark showhold"])
+        .map(|t| parse_upgradable(&t));
     Inside {
         os,
         packages: exec(kind, id, &["dpkg-query", "-W", "-f", "${Package}\n"]).map(|t| count_packages(&t)),
-        upgradable: exec(kind, id, &["apt", "list", "--upgradable"]).map(|t| count_upgradable(&t)),
+        upgradable: up.map(|u| u.0),
+        held: up.map_or(0, |u| u.1),
         lists_age: exec(kind, id, &["stat", "-c", "%Y", "/var/lib/apt/lists"])
             .and_then(|t| t.trim().parse::<u64>().ok())
             .map(|m| now.saturating_sub(m)),
@@ -410,6 +442,20 @@ mod tests {
       {"type":"qemu","vmid":100,"name":"vm","node":"pve","status":"stopped","cpu":0,"maxcpu":4,"mem":0,"maxmem":4096,"tags":"","template":1},
       {"type":"storage","storage":"local","node":"pve"}
     ]"#;
+
+    #[test]
+    fn held_packages_are_not_upgrades() {
+        let t =
+            "Listing...\nnodejs/nodistro 24 amd64 [upgradable from: 23]\ncurl/stable 8 amd64 [upgradable from: 7]\n---hold---\nnodejs\n";
+        assert_eq!(parse_upgradable(t), (1, 1));
+        assert_eq!(parse_upgradable("Listing...\n---hold---\n"), (0, 0));
+    }
+
+    #[test]
+    fn the_first_apt_error_is_the_one_shown() {
+        assert_eq!(apt_error("x\nE: Unmet dependencies.\nE: other\n").as_deref(), Some("E: Unmet dependencies."));
+        assert_eq!(apt_error("a\nlast\n\n").as_deref(), Some("last"));
+    }
 
     #[test]
     fn resources_split_into_nodes_and_sorted_guests() {
