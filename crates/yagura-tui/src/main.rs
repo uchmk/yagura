@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use yagura_core::Msg;
-use yagura_core::proxmox::{self, Cluster, Inside, Status};
+use yagura_core::proxmox::{self, Cluster, Inside, Power, Status};
 
 use model::{Model, Sort, View};
 
@@ -28,11 +28,23 @@ pub struct App {
     pub selected: usize,
     /// Names the screen could not say because the work is still going.
     pub status: String,
+    /// A power change waiting for y or n.
+    pub confirm: Option<Ask>,
+}
+
+/// What the user asked of a guest, shown until they answer.
+#[derive(Clone)]
+pub struct Ask {
+    pub id: u32,
+    pub name: String,
+    pub kind: proxmox::Kind,
+    pub power: Power,
 }
 
 enum Job {
     Cluster(Cluster),
     Inside(u32, Inside),
+    Power(u32, Power, Result<(), String>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -42,7 +54,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter look inside (pct exec / qm guest exec)  q quit",
+            "yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter look inside (pct exec / qm guest exec)  o start  d shutdown  r reboot  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -51,7 +63,7 @@ fn main() -> std::io::Result<()> {
     let (jobs_tx, jobs) = unbounded();
     spawn_pve(jobs_tx.clone());
 
-    let mut app = App { model: Model::default(), view: View::Guests, sort: Sort::Id, selected: 0, status: String::new() };
+    let mut app = App { model: Model::default(), view: View::Guests, sort: Sort::Id, selected: 0, status: String::new(), confirm: None };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
     // some terminals (Tera Term) show it as a block over the table.
@@ -95,6 +107,12 @@ fn run(
                     app.model.looking.retain(|x| *x != id);
                     app.model.inside.insert(id, i);
                 }
+                Job::Power(id, p, r) => {
+                    app.status = match r {
+                        Ok(()) => format!("{id}: {} done", p.verb()),
+                        Err(e) => format!("{id}: {} failed: {e}", p.verb()),
+                    }
+                }
             }
         }
         prefetch(app, jobs_tx);
@@ -113,6 +131,10 @@ fn run(
             continue;
         }
         match k.code {
+            _ if app.confirm.is_some() => answer(app, k.code, jobs_tx),
+            KeyCode::Char('o') if app.view == View::Guests => ask(app, Power::Start),
+            KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
+            KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
             KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
             KeyCode::Tab => {
@@ -130,6 +152,38 @@ fn run(
             _ => {}
         }
     }
+}
+
+/// Ask for a power change of the selected guest; nothing runs until `y`.
+fn ask(app: &mut App, power: Power) {
+    let Some(g) = app.model.guests(app.sort).get(app.selected).map(|g| (g.id, g.name.clone(), g.kind, g.status, g.template)) else {
+        return;
+    };
+    let (id, name, kind, status, template) = g;
+    if template || !power.fits(status) {
+        app.status = format!("{id}: can not {} a guest in this state", power.verb());
+        return;
+    }
+    app.status.clear();
+    app.confirm = Some(Ask { id, name, kind, power });
+}
+
+/// The answer to a pending question: `y` runs it on a thread of its own, any
+/// other key drops it.
+fn answer(app: &mut App, key: KeyCode, tx: &Sender<Job>) {
+    let Some(a) = app.confirm.take() else { return };
+    if key != KeyCode::Char('y') {
+        app.status = "cancelled".into();
+        return;
+    }
+    app.status = format!("{}: {}...", a.id, a.power.verb());
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-power".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Power(a.id, a.power, proxmox::power(a.kind, a.id, a.power)));
+        })
+        .expect("spawn the power thread");
 }
 
 /// Start looking into the selected running guest (again, if it was looked

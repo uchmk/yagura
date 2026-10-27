@@ -285,6 +285,49 @@ fn agent(id: u32, args: &[&str]) -> Option<String> {
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
+/// What the keys can ask of a guest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Power {
+    Start,
+    Shutdown,
+    Reboot,
+}
+
+impl Power {
+    pub fn verb(self) -> &'static str {
+        match self {
+            Power::Start => "start",
+            Power::Shutdown => "shutdown",
+            Power::Reboot => "reboot",
+        }
+    }
+
+    /// Whether a guest in `status` can be asked this at all.
+    pub fn fits(self, status: Status) -> bool {
+        match self {
+            Power::Start => status == Status::Stopped,
+            Power::Shutdown | Power::Reboot => status == Status::Running,
+        }
+    }
+}
+
+/// The command for a power change: `pct <verb> <id>` or `qm <verb> <id>`.
+pub fn power_command(kind: Kind, id: u32, p: Power) -> (&'static str, [String; 2]) {
+    (if kind == Kind::Lxc { "pct" } else { "qm" }, [p.verb().to_string(), id.to_string()])
+}
+
+/// Run a power change and wait for it (shutdown can take a while: call it from
+/// a thread of its own). The error is the first line of what the tool said.
+pub fn power(kind: Kind, id: u32, p: Power) -> Result<(), String> {
+    let (prog, args) = power_command(kind, id, p);
+    let o = Command::new(prog).args(args).output().map_err(|e| format!("{prog}: {e}"))?;
+    if o.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&o.stderr);
+    Err(err.lines().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim().to_string())
+}
+
 /// Look inside a running guest. About two seconds per command, so call it
 /// from a thread of its own. Never runs `apt update`: the update count is only
 /// as fresh as the lists, and `lists_age` says how fresh that is. A VM needs
@@ -417,6 +460,15 @@ VmSwap:	   2048 kB
         .unwrap();
         assert_eq!(vm_swap(&run, &procs, 100), Some(Swap { used: 1024, max: None }));
         assert_eq!(vm_swap(&run, &procs, 101), None);
+    }
+
+    #[test]
+    fn power_changes_name_the_right_tool_and_fit_the_state() {
+        assert_eq!(power_command(Kind::Lxc, 101, Power::Reboot), ("pct", ["reboot".into(), "101".into()]));
+        assert_eq!(power_command(Kind::Qemu, 7, Power::Shutdown), ("qm", ["shutdown".into(), "7".into()]));
+        assert!(Power::Start.fits(Status::Stopped) && !Power::Start.fits(Status::Running));
+        assert!(Power::Reboot.fits(Status::Running) && !Power::Shutdown.fits(Status::Stopped));
+        assert!(!Power::Start.fits(Status::Other));
     }
 
     #[test]

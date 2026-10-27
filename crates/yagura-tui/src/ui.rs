@@ -186,7 +186,12 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn footer(f: &mut Frame, app: &App, area: Rect) {
-    let keys = " Tab view  j/k move  s sort  Enter inside  q quit";
+    if let Some(a) = &app.confirm {
+        let q = format!(" {} {} {} (y/n) ", a.power.verb(), a.id, a.name);
+        f.render_widget(Paragraph::new(q).style(RED.add_modifier(Modifier::BOLD)), area);
+        return;
+    }
+    let keys = " Tab view  j/k move  s sort  Enter inside  o start  d shutdown  r reboot  q quit";
     let text = if app.status.is_empty() { keys.to_string() } else { format!("{keys}   {}", app.status) };
     f.render_widget(Paragraph::new(text).style(DIM), area);
 }
@@ -212,7 +217,7 @@ mod tests {
             }],
             ..Cluster::default()
         };
-        App { model, view, sort: Sort::Id, selected: 0, status: String::new() }
+        App { model, view, sort: Sort::Id, selected: 0, status: String::new(), confirm: None }
     }
 
     fn render(a: &App) -> Buffer {
@@ -231,6 +236,13 @@ mod tests {
         assert!(text(&b).contains("web"));
         let red = b.content().iter().any(|c| c.symbol() == "9" && c.fg == Color::Red);
         assert!(red, "the swap cell should be red");
+    }
+
+    #[test]
+    fn a_pending_power_change_asks_in_the_footer() {
+        let mut a = app(View::Guests);
+        a.confirm = Some(crate::Ask { id: 101, name: "web".into(), kind: Kind::Lxc, power: yagura_core::proxmox::Power::Reboot });
+        assert!(text(&render(&a)).contains("reboot 101 web (y/n)"));
     }
 
     #[test]
