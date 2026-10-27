@@ -8,12 +8,14 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::bar;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table, TableState};
 use yagura_core::proxmox::{Kind, Note, Status, apps};
 
 use crate::App;
-use crate::model::{View, age, bytes};
+use crate::model::{Model, View, age, bytes};
+use yagura_core::proxmox::rrd::Point;
 
 const RED: Style = Style::new().fg(Color::Red);
 const SELECTED: Style = Style::new().bg(Color::Blue).add_modifier(Modifier::BOLD);
@@ -27,6 +29,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     match app.view {
         View::Guests => guests(f, app, body),
         View::Procs => procs(f, app, body),
+        View::Host => host_graphs(f, app, body),
+        View::Graph(id) => guest_graphs(f, app, id, body),
     }
     if app.view == View::Guests {
         inside(f, app, detail);
@@ -210,9 +214,117 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(q).style(RED.add_modifier(Modifier::BOLD)), area);
         return;
     }
-    let keys = " Tab view  j/k move  s sort  Enter inside  o start  d shutdown  r reboot  q quit";
+    let keys = match app.view {
+        View::Host => " Tab guests  q quit",
+        View::Guests => " Tab view  j/k move  s sort  Enter graphs  o start  d shutdown  r reboot  q quit",
+        View::Procs => " Tab host  j/k move  q quit",
+        View::Graph(_) => " Esc back  q quit",
+    };
     let text = if app.status.is_empty() { keys.to_string() } else { format!("{keys}   {}", app.status) };
     f.render_widget(Paragraph::new(text).style(DIM), area);
+}
+
+/// Bars made of ASCII only (see the top of this file).
+const BARS: bar::Set = bar::Set {
+    full: "#",
+    seven_eighths: "#",
+    three_quarters: "#",
+    five_eighths: "+",
+    half: "+",
+    three_eighths: ":",
+    one_quarter: ":",
+    one_eighth: ".",
+    empty: " ",
+};
+
+/// One graph: a title with the latest value, and the values oldest first.
+struct Chart {
+    title: String,
+    values: Vec<f64>,
+    /// The value a full bar stands for; 0 means the largest value seen.
+    max: f64,
+}
+
+fn percent(label: &str, values: Vec<f64>) -> Chart {
+    let last = values.last().copied().unwrap_or(0.0);
+    Chart { title: format!(" {label} {last:.1}% "), values, max: 100.0 }
+}
+
+fn rate(label: &str, values: Vec<f64>) -> Chart {
+    let last = values.last().copied().unwrap_or(0.0);
+    Chart { title: format!(" {label} {}/s ", bytes(last as u64)), values, max: 0.0 }
+}
+
+fn ratio(a: f64, b: f64) -> f64 {
+    if b > 0.0 { a / b * 100.0 } else { 0.0 }
+}
+
+fn series(pts: &[Point], f: impl Fn(&Point) -> f64) -> Vec<f64> {
+    pts.iter().map(f).collect()
+}
+
+/// The charts into a grid, two to a row where the screen is wide enough.
+fn grid(f: &mut Frame, area: Rect, charts: &[Chart]) {
+    let cols = if area.width >= 80 { 2 } else { 1 };
+    let rows = charts.len().div_ceil(cols).max(1);
+    let row_areas = Layout::vertical(vec![Constraint::Ratio(1, rows as u32); rows]).split(area);
+    for (r, row) in charts.chunks(cols).enumerate() {
+        let cells = Layout::horizontal(vec![Constraint::Ratio(1, cols as u32); cols]).split(row_areas[r]);
+        for (c, ch) in row.iter().enumerate() {
+            let block = Block::new().borders(Borders::ALL).title(ch.title.clone());
+            let inner = block.inner(cells[c]);
+            f.render_widget(block, cells[c]);
+            // The newest values that fit; the widget draws from the left.
+            let skip = ch.values.len().saturating_sub(inner.width as usize);
+            let max = if ch.max > 0.0 { ch.max } else { ch.values.iter().copied().fold(1.0, f64::max) };
+            let data: Vec<u64> = ch.values[skip..].iter().map(|v| (v / max * 1000.0).clamp(0.0, 1000.0) as u64).collect();
+            f.render_widget(Sparkline::default().data(&data).max(1000).bar_set(BARS), inner);
+        }
+    }
+}
+
+/// The node's last hour, and the GPU since this screen started.
+fn host_graphs(f: &mut Frame, app: &App, area: Rect) {
+    let m: &Model = &app.model;
+    let p = &m.host_rrd;
+    let mut charts = vec![
+        percent("cpu", series(p, |x| x.cpu * 100.0)),
+        percent("mem", series(p, |x| ratio(x.mem, x.maxmem))),
+        percent("iowait", series(p, |x| x.iowait * 100.0)),
+        percent("root disk", series(p, |x| ratio(x.disk, x.maxdisk))),
+        rate("net in", series(p, |x| x.netin)),
+        rate("net out", series(p, |x| x.netout)),
+    ];
+    if m.gpu.is_empty() {
+        charts.push(Chart { title: " gpu: none found ".into(), values: vec![], max: 100.0 });
+    } else {
+        charts.push(percent("gpu (since start)", m.gpu.iter().map(|v| *v as f64).collect()));
+    }
+    if p.is_empty() {
+        charts.truncate(6);
+    }
+    grid(f, area, &charts);
+}
+
+/// One guest's last hour. Proxmox keeps no GPU figures, so there is no GPU graph.
+fn guest_graphs(f: &mut Frame, app: &App, id: u32, area: Rect) {
+    let m: &Model = &app.model;
+    let name = m.cluster.guests.iter().find(|g| g.id == id).map_or(String::new(), |g| g.name.clone());
+    let [title, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
+    f.render_widget(Paragraph::new(Line::styled(format!(" {id} {name}  (last hour, Esc back; no GPU figures in Proxmox)"), DIM)), title);
+    let Some(p) = m.guest_rrd.get(&id).filter(|p| !p.is_empty()) else {
+        f.render_widget(Paragraph::new(Line::styled(" reading...", DIM)), rest);
+        return;
+    };
+    let mut charts = vec![percent("cpu", series(p, |x| x.cpu * 100.0)), percent("mem", series(p, |x| ratio(x.mem, x.maxmem)))];
+    if p.iter().any(|x| x.maxdisk > 0.0) {
+        charts.push(percent("disk used", series(p, |x| ratio(x.disk, x.maxdisk))));
+    }
+    charts.push(rate("disk read", series(p, |x| x.diskread)));
+    charts.push(rate("disk write", series(p, |x| x.diskwrite)));
+    charts.push(rate("net in", series(p, |x| x.netin)));
+    charts.push(rate("net out", series(p, |x| x.netout)));
+    grid(f, rest, &charts);
 }
 
 #[cfg(test)]
@@ -236,7 +348,7 @@ mod tests {
             }],
             ..Cluster::default()
         };
-        App { model, view, sort: Sort::Id, selected: 0, status: String::new(), confirm: None }
+        App { model, view, sort: Sort::Id, selected: 0, status: String::new(), confirm: None, rrd_at: None, rrd_busy: false }
     }
 
     fn render(a: &App) -> Buffer {
@@ -284,8 +396,59 @@ mod tests {
     }
 
     #[test]
+    fn scrolling_through_many_processes_does_not_panic() {
+        let mut a = app(View::Procs);
+        a.model.procs = (0..300)
+            .map(|i| yagura_core::Proc {
+                pid: i,
+                name: format!("p\u{3042}\t{i}\u{1b}"),
+                user: (i % 2 == 0).then(|| "root".into()),
+                cpu: i as f32,
+                ..Default::default()
+            })
+            .collect();
+        let mut t = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        for s in (0..300).chain((0..300).rev()) {
+            a.selected = s;
+            t.draw(|f| draw(f, &a)).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_graph_screens_draw_with_and_without_history() {
+        use yagura_core::proxmox::rrd::Point;
+        let pts: Vec<Point> = (0..70)
+            .map(|i| Point {
+                cpu: i as f64 / 70.0,
+                mem: 5.0,
+                maxmem: 10.0,
+                disk: 1.0,
+                maxdisk: 4.0,
+                netin: i as f64 * 1000.0,
+                ..Point::default()
+            })
+            .collect();
+        for w in [20, 60, 100] {
+            for v in [View::Host, View::Graph(101), View::Graph(999)] {
+                let mut a = app(v);
+                let mut t = Terminal::new(TestBackend::new(w, 24)).unwrap();
+                t.draw(|f| draw(f, &a)).unwrap();
+                a.model.host_rrd = pts.clone();
+                a.model.guest_rrd.insert(101, pts.clone());
+                a.model.push_gpu(Some(50.0));
+                t.draw(|f| draw(f, &a)).unwrap();
+            }
+        }
+        let mut a = app(View::Graph(101));
+        a.model.guest_rrd.insert(101, pts);
+        let s = text(&render(&a));
+        assert!(s.contains("cpu 98.6%") && s.contains("mem 50.0%") && s.contains("net in 67K/s"), "{s}");
+        assert!(s.contains('#'));
+    }
+
+    #[test]
     fn both_views_draw_on_a_small_screen() {
-        for v in [View::Guests, View::Procs] {
+        for v in [View::Guests, View::Procs, View::Host, View::Graph(101)] {
             let mut t = Terminal::new(TestBackend::new(20, 6)).unwrap();
             t.draw(|f| draw(f, &app(v))).unwrap();
         }

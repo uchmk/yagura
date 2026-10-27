@@ -1,16 +1,21 @@
 //! What the screen shows, and the arithmetic behind it. No terminal here, so
 //! the tests need none.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
+use yagura_core::proxmox::rrd::Point;
 use yagura_core::proxmox::{Cluster, Guest, Inside, apps};
 use yagura_core::{Mem, Proc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
+    /// The Proxmox host's graphs; where the screen starts.
+    Host,
     Guests,
     Procs,
+    /// One guest's graphs.
+    Graph(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +53,9 @@ pub struct Rate {
     pub tx: f64,
 }
 
+/// Seconds of GPU history kept.
+const GPU_KEEP: usize = 300;
+
 #[derive(Default)]
 pub struct Model {
     pub host: String,
@@ -62,6 +70,11 @@ pub struct Model {
     pub looking: Vec<u32>,
     /// Latest release per app (normalised name); `None` once asked and not answered.
     pub latest: HashMap<String, Option<String>>,
+    /// The busiest GPU's usage, one sample a second (Proxmox keeps none).
+    pub gpu: VecDeque<f32>,
+    /// The last hour of the node and of the guests whose graphs were opened.
+    pub host_rrd: Vec<Point>,
+    pub guest_rrd: HashMap<u32, Vec<Point>>,
     last: HashMap<u32, (u64, u64, Instant)>,
 }
 
@@ -107,6 +120,21 @@ impl Model {
         let apps = &self.inside.get(&id)?.apps;
         let (n, v) = apps.iter().find(|(n, _)| apps::repo(n).is_some()).or(apps.first())?;
         Some((n, v, self.latest.get(&apps::key(n)).and_then(|l| l.as_deref())))
+    }
+
+    /// The node whose graphs the host screen shows: the one named like this machine, else the first.
+    pub fn host_node(&self) -> Option<&str> {
+        let nodes = &self.cluster.nodes;
+        nodes.iter().find(|n| n.name.eq_ignore_ascii_case(&self.host)).or(nodes.first()).map(|n| n.name.as_str())
+    }
+
+    /// Keep a GPU sample; the ring holds `GPU_KEEP` of them.
+    pub fn push_gpu(&mut self, usage: Option<f32>) {
+        let Some(u) = usage else { return };
+        if self.gpu.len() == GPU_KEEP {
+            self.gpu.pop_front();
+        }
+        self.gpu.push_back(u);
     }
 
     /// The processes, busiest first.

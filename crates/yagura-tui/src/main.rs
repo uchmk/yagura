@@ -11,11 +11,14 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use yagura_core::Msg;
+use yagura_core::proxmox::rrd::Point;
 use yagura_core::proxmox::{self, Cluster, Inside, Power, Status};
 
 use model::{Model, Sort, View};
 
 const PVE_EVERY: Duration = Duration::from_secs(5);
+/// How often the graphs on screen are read again (the history has a point a minute).
+const RRD_EVERY: Duration = Duration::from_secs(20);
 /// How many `pct exec` run at once when the containers are looked into in the
 /// background.
 const PARALLEL: usize = 4;
@@ -30,6 +33,9 @@ pub struct App {
     pub status: String,
     /// A power change waiting for y or n.
     pub confirm: Option<Ask>,
+    /// When the graphs on screen were last asked for, and whether that is still running.
+    pub rrd_at: Option<Instant>,
+    pub rrd_busy: bool,
 }
 
 /// What the user asked of a guest, shown until they answer.
@@ -46,6 +52,8 @@ enum Job {
     Inside(u32, Inside),
     Power(u32, Power, Result<(), String>),
     Latest(String, Option<String>),
+    HostRrd(Vec<Point>),
+    GuestRrd(u32, Vec<Point>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -55,7 +63,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter look inside (pct exec / qm guest exec)  o start  d shutdown  r reboot  q quit",
+            "yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter graphs  Esc back  o start  d shutdown  r reboot  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -64,7 +72,16 @@ fn main() -> std::io::Result<()> {
     let (jobs_tx, jobs) = unbounded();
     spawn_pve(jobs_tx.clone());
 
-    let mut app = App { model: Model::default(), view: View::Guests, sort: Sort::Id, selected: 0, status: String::new(), confirm: None };
+    let mut app = App {
+        model: Model::default(),
+        view: View::Host,
+        sort: Sort::Id,
+        selected: 0,
+        status: String::new(),
+        confirm: None,
+        rrd_at: None,
+        rrd_busy: false,
+    };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
     // some terminals (Tera Term) show it as a block over the table.
@@ -114,6 +131,14 @@ fn run(
                 Job::Latest(key, tag) => {
                     app.model.latest.insert(key, tag);
                 }
+                Job::HostRrd(p) => {
+                    app.rrd_busy = false;
+                    app.model.host_rrd = p;
+                }
+                Job::GuestRrd(id, p) => {
+                    app.rrd_busy = false;
+                    app.model.guest_rrd.insert(id, p);
+                }
                 Job::Power(id, p, r) => {
                     app.status = match r {
                         Ok(()) => format!("{id}: {} done", p.verb()),
@@ -123,9 +148,11 @@ fn run(
             }
         }
         prefetch(app, jobs_tx);
+        refresh_rrd(app, jobs_tx);
         let rows = match app.view {
             View::Guests => app.model.cluster.guests.len(),
             View::Procs => app.model.procs.len(),
+            View::Host | View::Graph(_) => 0,
         };
         app.selected = app.selected.min(rows.saturating_sub(1));
         term.draw(|f| ui::draw(f, app))?;
@@ -133,7 +160,8 @@ fn run(
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
-        let Event::Key(k) = event::read()? else { continue };
+        // A sequence crossterm cannot parse (a wheel turn, in some terminals) is dropped, not fatal.
+        let Ok(Event::Key(k)) = event::read() else { continue };
         if k.kind != KeyEventKind::Press {
             continue;
         }
@@ -142,11 +170,21 @@ fn run(
             KeyCode::Char('o') if app.view == View::Guests => ask(app, Power::Start),
             KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
             KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
+            KeyCode::Esc if matches!(app.view, View::Graph(_)) => {
+                app.view = View::Guests;
+                app.rrd_at = None;
+                term.clear()?;
+            }
             KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-            KeyCode::Tab => {
-                app.view = if app.view == View::Guests { View::Procs } else { View::Guests };
+            KeyCode::Tab if !matches!(app.view, View::Graph(_)) => {
+                app.view = match app.view {
+                    View::Host => View::Guests,
+                    View::Guests => View::Procs,
+                    _ => View::Host,
+                };
                 app.selected = 0;
+                app.rrd_at = None;
                 // Drop whatever the terminal still shows from the other view.
                 term.clear()?;
             }
@@ -155,7 +193,7 @@ fn run(
             KeyCode::Char('g') | KeyCode::Home => app.selected = 0,
             KeyCode::Char('G') | KeyCode::End => app.selected = rows.saturating_sub(1),
             KeyCode::Char('s') => app.sort = app.sort.next(),
-            KeyCode::Enter if app.view == View::Guests => look_inside(app, jobs_tx),
+            KeyCode::Enter if app.view == View::Guests => open_graphs(app),
             _ => {}
         }
     }
@@ -193,17 +231,46 @@ fn answer(app: &mut App, key: KeyCode, tx: &Sender<Job>) {
         .expect("spawn the power thread");
 }
 
-/// Start looking into the selected running guest (again, if it was looked
-/// into before), unless one is already going for it.
-fn look_inside(app: &mut App, tx: &Sender<Job>) {
-    let Some(g) = app.model.guests(app.sort).get(app.selected).map(|g| (g.id, g.kind, g.status)) else { return };
-    let (id, kind, status) = g;
-    if status != Status::Running {
-        app.status = "only a running guest can be looked into".into();
+/// Open the graphs of the selected guest.
+fn open_graphs(app: &mut App) {
+    let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id) else { return };
+    app.status.clear();
+    app.view = View::Graph(id);
+    app.rrd_at = None;
+}
+
+/// Read the history of what the screen graphs, on a thread of its own, now and
+/// then while that screen is up.
+fn refresh_rrd(app: &mut App, tx: &Sender<Job>) {
+    if app.rrd_busy || app.rrd_at.is_some_and(|t| t.elapsed() < RRD_EVERY) {
         return;
     }
-    app.status.clear();
-    start_inspect(&mut app.model, id, kind, tx);
+    let tx = tx.clone();
+    match app.view {
+        View::Host => {
+            let Some(node) = app.model.host_node().map(str::to_string) else { return };
+            std::thread::Builder::new()
+                .name("yagura-rrd".into())
+                .spawn(move || {
+                    let _ = tx.send(Job::HostRrd(proxmox::rrd::node(&node)));
+                })
+                .expect("spawn the rrd thread");
+        }
+        View::Graph(id) => {
+            let Some((node, kind)) = app.model.cluster.guests.iter().find(|g| g.id == id).map(|g| (g.node.clone(), g.kind)) else {
+                return;
+            };
+            std::thread::Builder::new()
+                .name("yagura-rrd".into())
+                .spawn(move || {
+                    let _ = tx.send(Job::GuestRrd(id, proxmox::rrd::guest(&node, kind, id)));
+                })
+                .expect("spawn the rrd thread");
+        }
+        _ => return,
+    }
+    app.rrd_busy = true;
+    app.rrd_at = Some(Instant::now());
 }
 
 /// Look into every running guest nobody has looked into yet, a few at a
@@ -262,6 +329,7 @@ fn apply(m: &mut Model, msg: Msg) {
             m.load = load;
         }
         Msg::Mem(x) => m.mem = x,
+        Msg::Gpu(devs) => m.push_gpu(devs.first().and_then(|d| d.usage)),
         Msg::Procs { procs, .. } => m.procs = procs,
         _ => {}
     }

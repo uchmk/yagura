@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-236 rows to press (236 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+237 rows to press (237 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -251,8 +251,9 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 
 - [ ] **3p.1** On a Proxmox VE host as root, `yagura-tui` shows the host's cpu / mem / swap, the node under `pve:`, and one row per guest from `pvesh` (id · ct or vm · name · cpu · mem · swap · net /s · uptime · tags). Stopped guests are dim, templates last. Compare with the web UI.
 - [ ] **3p.2** A container whose swap is at 90% or more of its limit shows the swap cell in red, also on the selected row. `s` cycles id → cpu → mem → swap.
-- [ ] **3p.3** Enter on a running container shows `looking inside…` at once (the keys stay quick), then OS, package count, upgradable count with the age of the apt lists, and `reboot required` where `/var/run/reboot-required` exists. `apt update` is never run. Enter on a VM or a stopped container says why not.
+- [ ] **3p.3** Without any key, the running containers are looked into in the background (4 at a time): the table fills OS and UPD (upgradable count, `*` when a reboot is required), the pane under the table shows the packages and the age of the apt lists. `apt update` is never run. A VM without a guest agent says `no agent`.
 - [ ] **3p.4** Not as root, or off Proxmox, `pve:` says why (`pvesh failed (root needed?)` / `no pvesh`) and the host part still works. Tab shows the host's processes; `q` restores the terminal.
+- [ ] **3p.5** `yagura-tui` starts on the host graphs (cpu, mem, iowait, root disk, net in/out, gpu since start; ASCII bars, no stale cells). Tab goes host, guests, processes, host. Enter on a guest opens its graphs (cpu, mem, disk used, disk read/write, net in/out; the last hour), Esc returns to the guests, `q` quits. Scrolling with the mouse wheel never ends the program.
 
 ## 4. Resizing the columns
 
