@@ -6,6 +6,19 @@
 
 ## [未リリース]
 
+## [0.73.37] - 2026-10-28
+
+### 追加
+
+- `yagura-tui`: ゲストの表に OS と UPD（更新できるパッケージの数。再起動が要れば `*` を付けて赤）の列を足した。中身を調べている間は `...`。
+- `yagura-tui`: VM の中身も QEMU ゲストエージェント（`qm guest exec` / `qm agent get-osinfo`）で、コンテナと同じ項目を調べる。
+  エージェントが答えない VM は OS の列に `no agent` と出し、下の欄に理由を書く。起動したあとの並列の先読みも VM を含む。
+- `yagura-core`: VM の swap を、QEMU のプロセス（`/run/qemu-server/<id>.pid` → `/proc/<pid>/status` の `VmSwap`）から読む。
+
+### 変更
+
+- `yagura-tui`: 上限の無い swap（VM）は `使用量/inf` でなく使用量だけを出す。
+
 ## [0.73.36] - 2026-10-28
 
 ### 変更

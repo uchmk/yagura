@@ -41,7 +41,10 @@ fn main() -> std::io::Result<()> {
         return Ok(());
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
-        println!("yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter look inside (pct exec)  q quit", env!("CARGO_PKG_VERSION"));
+        println!(
+            "yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter look inside (pct exec / qm guest exec)  q quit",
+            env!("CARGO_PKG_VERSION")
+        );
         return Ok(());
     }
     let (rx, _ctl) = yagura_core::spawn(None, SAMPLE);
@@ -129,38 +132,38 @@ fn run(
     }
 }
 
-/// Start `pct exec` on the selected running container (again, if it was
-/// looked into before), unless one is already going for it.
+/// Start looking into the selected running guest (again, if it was looked
+/// into before), unless one is already going for it.
 fn look_inside(app: &mut App, tx: &Sender<Job>) {
     let Some(g) = app.model.guests(app.sort).get(app.selected).map(|g| (g.id, g.kind, g.status)) else { return };
     let (id, kind, status) = g;
-    if kind != proxmox::Kind::Lxc || status != Status::Running {
-        app.status = "pct exec needs a running container".into();
+    if status != Status::Running {
+        app.status = "only a running guest can be looked into".into();
         return;
     }
     app.status.clear();
-    start_inspect(&mut app.model, id, tx);
+    start_inspect(&mut app.model, id, kind, tx);
 }
 
-/// Look into every running container nobody has looked into yet, a few at a
-/// time, so the pane is already filled when the cursor gets there.
+/// Look into every running guest nobody has looked into yet, a few at a
+/// time, so the table and the pane are already filled when the cursor gets there.
 fn prefetch(app: &mut App, tx: &Sender<Job>) {
     let m = &app.model;
-    let todo: Vec<u32> = m
+    let todo: Vec<(u32, proxmox::Kind)> = m
         .cluster
         .guests
         .iter()
-        .filter(|g| g.kind == proxmox::Kind::Lxc && g.status == Status::Running && !g.template)
-        .map(|g| g.id)
-        .filter(|id| !m.inside.contains_key(id) && !m.looking.contains(id))
+        .filter(|g| g.status == Status::Running && !g.template)
+        .filter(|g| !m.inside.contains_key(&g.id) && !m.looking.contains(&g.id))
+        .map(|g| (g.id, g.kind))
         .take(PARALLEL.saturating_sub(m.looking.len()))
         .collect();
-    for id in todo {
-        start_inspect(&mut app.model, id, tx);
+    for (id, kind) in todo {
+        start_inspect(&mut app.model, id, kind, tx);
     }
 }
 
-fn start_inspect(m: &mut Model, id: u32, tx: &Sender<Job>) {
+fn start_inspect(m: &mut Model, id: u32, kind: proxmox::Kind, tx: &Sender<Job>) {
     if m.looking.contains(&id) {
         return;
     }
@@ -169,7 +172,7 @@ fn start_inspect(m: &mut Model, id: u32, tx: &Sender<Job>) {
     std::thread::Builder::new()
         .name("yagura-inspect".into())
         .spawn(move || {
-            let _ = tx.send(Job::Inside(id, proxmox::inspect(id)));
+            let _ = tx.send(Job::Inside(id, proxmox::inspect(kind, id)));
         })
         .expect("spawn the inspect thread");
 }

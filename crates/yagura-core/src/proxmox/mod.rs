@@ -178,7 +178,22 @@ pub fn lxc_swap(root: &Path, id: u32) -> Option<Swap> {
     })
 }
 
-/// The whole cluster listing, with the containers' swap added. Runs `pvesh`,
+/// `VmSwap` of a `/proc/<pid>/status`, in bytes (the file says kB).
+pub fn parse_vmswap(status: &str) -> Option<u64> {
+    let kb = status.lines().find_map(|l| l.strip_prefix("VmSwap:"))?.trim().strip_suffix("kB")?.trim().parse::<u64>().ok()?;
+    Some(kb * 1024)
+}
+
+/// A VM's swap: the swapped-out part of its QEMU process, found through the
+/// pid file `<run>/<id>.pid` (`/run/qemu-server`). QEMU has no swap limit of
+/// its own, so `max` is unset.
+pub fn vm_swap(run: &Path, proc_root: &Path, id: u32) -> Option<Swap> {
+    let pid: u32 = std::fs::read_to_string(run.join(format!("{id}.pid"))).ok()?.trim().parse().ok()?;
+    let status = std::fs::read_to_string(proc_root.join(pid.to_string()).join("status")).ok()?;
+    Some(Swap { used: parse_vmswap(&status)?, max: None })
+}
+
+/// The whole cluster listing, with the guests' swap added. Runs `pvesh`,
 /// so call it from a thread of its own.
 pub fn read() -> Cluster {
     let none = |note| Cluster { note: Some(note), ..Cluster::default() };
@@ -193,13 +208,17 @@ pub fn read() -> Cluster {
     let Ok((nodes, mut guests)) = parse_resources(&String::from_utf8_lossy(&out.stdout)) else {
         return none(Note::Unreadable);
     };
-    for g in guests.iter_mut().filter(|g| g.kind == Kind::Lxc && g.status == Status::Running) {
-        g.swap = lxc_swap(Path::new("/sys/fs/cgroup"), g.id);
+    for g in guests.iter_mut().filter(|g| g.status == Status::Running) {
+        g.swap = match g.kind {
+            Kind::Lxc => lxc_swap(Path::new("/sys/fs/cgroup"), g.id),
+            Kind::Qemu => vm_swap(Path::new("/run/qemu-server"), Path::new("/proc"), g.id),
+        };
     }
     Cluster { nodes, guests, note: None }
 }
 
-/// What is inside a container, read with `pct exec`.
+/// What is inside a guest: a container read with `pct exec`, a VM through its
+/// QEMU guest agent (`qm guest exec`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Inside {
     /// `PRETTY_NAME` of `/etc/os-release`.
@@ -210,6 +229,8 @@ pub struct Inside {
     /// Seconds since the apt lists were fetched: how far to trust `upgradable`.
     pub lists_age: Option<u64>,
     pub reboot_required: bool,
+    /// A VM whose guest agent does not answer: nothing could be read.
+    pub no_agent: bool,
 }
 
 /// `PRETTY_NAME` from `/etc/os-release`.
@@ -228,24 +249,70 @@ pub fn count_upgradable(text: &str) -> u32 {
     text.lines().filter(|l| l.contains("[upgradable from:")).count() as u32
 }
 
-fn exec(id: u32, args: &[&str]) -> Option<String> {
-    let o = Command::new("pct").arg("exec").arg(id.to_string()).arg("--").args(args).output().ok()?;
+/// The result of `qm guest exec`: its `out-data` when the command exited 0.
+pub fn parse_guest_exec(json: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json).ok()?;
+    (v.get("exitcode").and_then(Value::as_i64) == Some(0)).then(|| v.get("out-data").and_then(Value::as_str).unwrap_or("").to_string())
+}
+
+/// `qm agent <id> get-osinfo`: the pretty name, and whether it is Windows.
+pub fn parse_osinfo(json: &str) -> (Option<String>, bool) {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return (None, false) };
+    let r = v.get("result").unwrap_or(&v);
+    let name = r.get("pretty-name").or_else(|| r.get("name")).and_then(Value::as_str).map(str::to_string);
+    (name, r.get("id").and_then(Value::as_str) == Some("mswindows"))
+}
+
+fn exec(kind: Kind, id: u32, args: &[&str]) -> Option<String> {
+    match kind {
+        Kind::Lxc => {
+            let o = Command::new("pct").arg("exec").arg(id.to_string()).arg("--").args(args).output().ok()?;
+            o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+        }
+        Kind::Qemu => {
+            let o =
+                Command::new("qm").args(["guest", "exec"]).arg(id.to_string()).args(["--timeout", "20", "--"]).args(args).output().ok()?;
+            if !o.status.success() {
+                return None;
+            }
+            parse_guest_exec(&String::from_utf8_lossy(&o.stdout))
+        }
+    }
+}
+
+fn agent(id: u32, args: &[&str]) -> Option<String> {
+    let o = Command::new("qm").arg("agent").arg(id.to_string()).args(args).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
-/// Look inside a running container. About two seconds per command, so call
-/// it from a thread of its own. Never runs `apt update`: the update count is
-/// only as fresh as the lists, and `lists_age` says how fresh that is.
-pub fn inspect(id: u32) -> Inside {
+/// Look inside a running guest. About two seconds per command, so call it
+/// from a thread of its own. Never runs `apt update`: the update count is only
+/// as fresh as the lists, and `lists_age` says how fresh that is. A VM needs
+/// the guest agent; Windows answers with its name only.
+pub fn inspect(kind: Kind, id: u32) -> Inside {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let os = match kind {
+        Kind::Lxc => exec(kind, id, &["cat", "/etc/os-release"]).and_then(|t| parse_os_release(&t)),
+        Kind::Qemu => {
+            if agent(id, &["ping"]).is_none() {
+                return Inside { no_agent: true, ..Inside::default() };
+            }
+            let (name, windows) = agent(id, &["get-osinfo"]).map_or((None, false), |t| parse_osinfo(&t));
+            if windows {
+                return Inside { os: name, ..Inside::default() };
+            }
+            name.or_else(|| exec(kind, id, &["cat", "/etc/os-release"]).and_then(|t| parse_os_release(&t)))
+        }
+    };
     Inside {
-        os: exec(id, &["cat", "/etc/os-release"]).and_then(|t| parse_os_release(&t)),
-        packages: exec(id, &["dpkg-query", "-W", "-f", "${Package}\\n"]).map(|t| count_packages(&t)),
-        upgradable: exec(id, &["apt", "list", "--upgradable"]).map(|t| count_upgradable(&t)),
-        lists_age: exec(id, &["stat", "-c", "%Y", "/var/lib/apt/lists"])
+        os,
+        packages: exec(kind, id, &["dpkg-query", "-W", "-f", "${Package}\n"]).map(|t| count_packages(&t)),
+        upgradable: exec(kind, id, &["apt", "list", "--upgradable"]).map(|t| count_upgradable(&t)),
+        lists_age: exec(kind, id, &["stat", "-c", "%Y", "/var/lib/apt/lists"])
             .and_then(|t| t.trim().parse::<u64>().ok())
             .map(|m| now.saturating_sub(m)),
-        reboot_required: exec(id, &["test", "-e", "/var/run/reboot-required"]).is_some(),
+        reboot_required: exec(kind, id, &["test", "-e", "/var/run/reboot-required"]).is_some(),
+        no_agent: false,
     }
 }
 
@@ -315,5 +382,50 @@ mod tests {
         let apt = "Listing...\nbash/stable 5.2 amd64 [upgradable from: 5.1]\ncurl/stable 8 amd64 [upgradable from: 7]\n";
         assert_eq!(count_upgradable(apt), 2);
         assert_eq!(count_upgradable("Listing...\n"), 0);
+    }
+
+    #[test]
+    fn a_vms_swap_is_its_qemu_processes() {
+        assert_eq!(
+            parse_vmswap(
+                "Name:	qemu
+VmSwap:	   2048 kB
+"
+            ),
+            Some(2048 * 1024)
+        );
+        assert_eq!(
+            parse_vmswap(
+                "Name:	qemu
+"
+            ),
+            None
+        );
+        let (run, procs) = (crate::util::test_dir("pve-run"), crate::util::test_dir("pve-proc"));
+        std::fs::write(
+            run.join("100.pid"),
+            "4242
+",
+        )
+        .unwrap();
+        std::fs::create_dir_all(procs.join("4242")).unwrap();
+        std::fs::write(
+            procs.join("4242/status"),
+            "VmSwap:	1 kB
+",
+        )
+        .unwrap();
+        assert_eq!(vm_swap(&run, &procs, 100), Some(Swap { used: 1024, max: None }));
+        assert_eq!(vm_swap(&run, &procs, 101), None);
+    }
+
+    #[test]
+    fn the_guest_agent_answers_are_unwrapped() {
+        assert_eq!(parse_guest_exec(r#"{"exitcode":0,"exited":1,"out-data":"a\nb\n"}"#).as_deref(), Some("a\nb\n"));
+        assert_eq!(parse_guest_exec(r#"{"exitcode":1,"exited":1}"#), None);
+        assert_eq!(parse_guest_exec("nope"), None);
+        assert_eq!(parse_osinfo(r#"{"id":"debian","pretty-name":"Debian GNU/Linux 12"}"#), (Some("Debian GNU/Linux 12".into()), false));
+        assert_eq!(parse_osinfo(r#"{"result":{"id":"mswindows","name":"Microsoft Windows"}}"#), (Some("Microsoft Windows".into()), true));
+        assert_eq!(parse_osinfo("x"), (None, false));
     }
 }

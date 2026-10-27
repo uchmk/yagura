@@ -72,12 +72,13 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         let rate = m.rates.get(&g.id).copied().unwrap_or_default();
         let (swap, swap_style) = match g.swap {
             Some(s) => (
-                format!("{}/{}", bytes(s.used), s.max.map_or("inf".into(), bytes)),
+                s.max.map_or(bytes(s.used), |max| format!("{}/{}", bytes(s.used), bytes(max))),
                 if s.near_limit() { RED.add_modifier(Modifier::BOLD) } else { Style::new() },
             ),
             None => ("-".into(), DIM),
         };
         let run = g.status == Status::Running;
+        let (os, upd, upd_style) = look(m, g.id, run);
         let base = if run { Style::new() } else { DIM };
         Row::new([
             Cell::from(g.id.to_string()),
@@ -88,12 +89,14 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
             Cell::from(swap).style(swap_style),
             Cell::from(if run { format!("{}/{}", bytes(rate.rx as u64), bytes(rate.tx as u64)) } else { String::new() }),
             Cell::from(if run { age(g.uptime) } else { "stopped".into() }),
+            Cell::from(os),
+            Cell::from(upd).style(upd_style),
             Cell::from(g.tags.join(",")),
         ])
         .style(base)
     });
-    let head =
-        Row::new(["ID", "", "NAME", "CPU", "MEM", "SWAP", "NET in/out /s", "UP", "TAGS"]).style(Style::new().add_modifier(Modifier::BOLD));
+    let head = Row::new(["ID", "", "NAME", "CPU", "MEM", "SWAP", "NET in/out /s", "UP", "OS", "UPD", "TAGS"])
+        .style(Style::new().add_modifier(Modifier::BOLD));
     let widths = [
         Constraint::Length(6),
         Constraint::Length(2),
@@ -103,12 +106,37 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(11),
         Constraint::Length(16),
         Constraint::Length(8),
+        Constraint::Length(16),
+        Constraint::Length(5),
         Constraint::Min(6),
     ];
     let title = format!(" guests (sort: {}) ", app.sort.label());
     let t = Table::new(rows, widths).header(head).block(Block::new().borders(Borders::TOP).title(title)).row_highlight_style(SELECTED);
     let mut st = TableState::default().with_selected(Some(app.selected));
     f.render_stateful_widget(t, area, &mut st);
+}
+
+/// The OS and the upgradable count of a guest for the table: blank until it
+/// has been looked into, `*` after the count when it wants a reboot.
+fn look(m: &crate::model::Model, id: u32, running: bool) -> (String, String, Style) {
+    if !running {
+        return (String::new(), String::new(), Style::new());
+    }
+    match m.inside.get(&id) {
+        None => (if m.looking.contains(&id) { "...".into() } else { String::new() }, String::new(), DIM),
+        Some(i) if i.no_agent => ("no agent".into(), String::new(), DIM),
+        Some(i) => {
+            let n = i.upgradable.map_or("-".into(), |n| n.to_string());
+            let (n, style) = if i.reboot_required { (format!("{n}*"), RED) } else { (n, Style::new()) };
+            (short_os(i.os.as_deref().unwrap_or("")), n, style)
+        }
+    }
+}
+
+/// `Debian GNU/Linux 12 (bookworm)` as `Debian 12`.
+pub fn short_os(name: &str) -> String {
+    let name = name.replace(" GNU/Linux", "");
+    name.split(" (").next().unwrap_or("").trim().to_string()
 }
 
 fn procs(f: &mut Frame, app: &App, area: Rect) {
@@ -140,6 +168,9 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
     if m.looking.contains(&g.id) {
         lines.push(Line::styled("looking inside...", DIM));
     } else if let Some(i) = m.inside.get(&g.id) {
+        if i.no_agent {
+            lines.push(Line::styled("no answer from the QEMU guest agent (is it installed and enabled?)", DIM));
+        }
         lines.push(Line::raw(format!("os: {}", i.os.as_deref().unwrap_or("?"))));
         let n = |v: Option<u32>| v.map_or("?".into(), |v| v.to_string());
         let stale = i.lists_age.map_or(String::new(), |a| format!(" (apt lists {} old)", age(a)));
@@ -148,7 +179,7 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::styled("reboot required", RED));
         }
     } else {
-        lines.push(Line::styled("Enter: look inside (pct exec)", DIM));
+        lines.push(Line::styled("Enter: look inside (pct exec / qm guest exec)", DIM));
     }
     let title = format!(" {} {} ", g.id, g.name);
     f.render_widget(Paragraph::new(lines).block(Block::new().borders(Borders::TOP).title(title)), area);
@@ -200,6 +231,13 @@ mod tests {
         assert!(text(&b).contains("web"));
         let red = b.content().iter().any(|c| c.symbol() == "9" && c.fg == Color::Red);
         assert!(red, "the swap cell should be red");
+    }
+
+    #[test]
+    fn short_os_names_read_short() {
+        assert_eq!(short_os("Debian GNU/Linux 12 (bookworm)"), "Debian 12");
+        assert_eq!(short_os("Ubuntu 24.04.1 LTS"), "Ubuntu 24.04.1 LTS");
+        assert_eq!(short_os(""), "");
     }
 
     #[test]
