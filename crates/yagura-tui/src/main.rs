@@ -74,7 +74,7 @@ fn main() -> std::io::Result<()> {
 
     let mut app = App {
         model: Model::default(),
-        view: View::Host,
+        view: View::Guests,
         sort: Sort::Id,
         selected: 0,
         status: String::new(),
@@ -150,11 +150,18 @@ fn run(
         prefetch(app, jobs_tx);
         refresh_rrd(app, jobs_tx);
         let rows = match app.view {
-            View::Guests => app.model.cluster.guests.len(),
+            View::Guests | View::Graph(_) => app.model.cluster.guests.len(),
             View::Procs => app.model.procs.len(),
-            View::Host | View::Graph(_) => 0,
+            View::Host => 0,
         };
         app.selected = app.selected.min(rows.saturating_sub(1));
+        // The graphs follow the selected guest.
+        if let View::Graph(old) = app.view
+            && let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id).filter(|id| *id != old)
+        {
+            app.view = View::Graph(id);
+            app.rrd_at = None;
+        }
         term.draw(|f| ui::draw(f, app))?;
 
         if !event::poll(Duration::from_millis(250))? {
@@ -167,9 +174,9 @@ fn run(
         }
         match k.code {
             _ if app.confirm.is_some() => answer(app, k.code, jobs_tx),
-            KeyCode::Char('o') if app.view == View::Guests => ask(app, Power::Start),
-            KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
-            KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
+            KeyCode::Char('o') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Start),
+            KeyCode::Char('d') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Shutdown),
+            KeyCode::Char('r') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Reboot),
             KeyCode::Esc if matches!(app.view, View::Graph(_)) => {
                 app.view = View::Guests;
                 app.rrd_at = None;
@@ -248,7 +255,7 @@ fn refresh_rrd(app: &mut App, tx: &Sender<Job>) {
     }
     let tx = tx.clone();
     match app.view {
-        View::Host => {
+        View::Host | View::Guests => {
             let Some(node) = app.model.host_node().map(str::to_string) else { return };
             std::thread::Builder::new()
                 .name("yagura-rrd".into())

@@ -22,17 +22,31 @@ const SELECTED: Style = Style::new().bg(Color::Blue).add_modifier(Modifier::BOLD
 const DIM: Style = Style::new().fg(Color::DarkGray);
 
 pub fn draw(f: &mut Frame, app: &App) {
-    let inside_h = if app.view == View::Guests { 7 } else { 0 };
-    let [head, body, detail, foot] =
-        Layout::vertical([Constraint::Length(3), Constraint::Min(5), Constraint::Length(inside_h), Constraint::Length(1)]).areas(f.area());
+    // About a fifth of the height for graphs above the guests (the host's, or the entered guest's), when the screen is tall enough to spare it.
+    let tall = f.area().height >= 30;
+    let table = app.view == View::Guests || (tall && matches!(app.view, View::Graph(_)));
+    let inside_h = if table { 7 } else { 0 };
+    let strip_h = if table { (f.area().height / 5).clamp(6, 12) } else { 0 };
+    let [head, strip_area, body, detail, foot] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(strip_h),
+        Constraint::Min(5),
+        Constraint::Length(inside_h),
+        Constraint::Length(1),
+    ])
+    .areas(f.area());
     header(f, app, head);
+    if strip_h > 0 && tall {
+        strip(f, app, strip_area);
+    }
     match app.view {
         View::Guests => guests(f, app, body),
         View::Procs => procs(f, app, body),
         View::Host => host_graphs(f, app, body),
+        View::Graph(_) if table => guests(f, app, body),
         View::Graph(id) => guest_graphs(f, app, id, body),
     }
-    if app.view == View::Guests {
+    if table {
         inside(f, app, detail);
     }
     footer(f, app, foot);
@@ -218,7 +232,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         View::Host => " Tab guests  q quit",
         View::Guests => " Tab view  j/k move  s sort  Enter graphs  o start  d shutdown  r reboot  q quit",
         View::Procs => " Tab host  j/k move  q quit",
-        View::Graph(_) => " Esc back  q quit",
+        View::Graph(_) => " Esc host graphs  j/k other guest  o start  d shutdown  r reboot  q quit",
     };
     let text = if app.status.is_empty() { keys.to_string() } else { format!("{keys}   {}", app.status) };
     f.render_widget(Paragraph::new(text).style(DIM), area);
@@ -271,15 +285,79 @@ fn grid(f: &mut Frame, area: Rect, charts: &[Chart]) {
     for (r, row) in charts.chunks(cols).enumerate() {
         let cells = Layout::horizontal(vec![Constraint::Ratio(1, cols as u32); cols]).split(row_areas[r]);
         for (c, ch) in row.iter().enumerate() {
-            let block = Block::new().borders(Borders::ALL).title(ch.title.clone());
-            let inner = block.inner(cells[c]);
-            f.render_widget(block, cells[c]);
-            // The newest values that fit; the widget draws from the left.
-            let skip = ch.values.len().saturating_sub(inner.width as usize);
-            let max = if ch.max > 0.0 { ch.max } else { ch.values.iter().copied().fold(1.0, f64::max) };
-            let data: Vec<u64> = ch.values[skip..].iter().map(|v| (v / max * 1000.0).clamp(0.0, 1000.0) as u64).collect();
-            f.render_widget(Sparkline::default().data(&data).max(1000).bar_set(BARS), inner);
+            chart(f, cells[c], ch);
         }
+    }
+}
+
+/// One boxed graph.
+fn chart(f: &mut Frame, area: Rect, ch: &Chart) {
+    let block = Block::new().borders(Borders::ALL).title(ch.title.clone());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    // The newest values that fit; the widget draws from the left.
+    let skip = ch.values.len().saturating_sub(inner.width as usize);
+    let max = if ch.max > 0.0 { ch.max } else { ch.values.iter().copied().fold(1.0, f64::max) };
+    let data: Vec<u64> = ch.values[skip..].iter().map(|v| (v / max * 1000.0).clamp(0.0, 1000.0) as u64).collect();
+    f.render_widget(Sparkline::default().data(&data).max(1000).bar_set(BARS), inner);
+}
+
+/// The entered guest's last hour in the same strip: cpu, memory, network, disk.
+fn guest_strip(f: &mut Frame, app: &App, id: u32, area: Rect) {
+    let m: &Model = &app.model;
+    let name = m.cluster.guests.iter().find(|g| g.id == id).map_or(String::new(), |g| g.name.clone());
+    let Some(p) = m.guest_rrd.get(&id).filter(|p| !p.is_empty()) else {
+        f.render_widget(Paragraph::new(Line::styled(format!(" {id} {name}: reading... (last hour)"), DIM)), area);
+        return;
+    };
+    let mut charts =
+        vec![percent(&format!("{id} {name} cpu"), series(p, |x| x.cpu * 100.0)), percent("mem", series(p, |x| ratio(x.mem, x.maxmem)))];
+    if area.width >= 60 {
+        charts.push(rate("net in", series(p, |x| x.netin)));
+    }
+    if area.width >= 100 {
+        charts.push(rate("net out", series(p, |x| x.netout)));
+    }
+    if area.width >= 130 {
+        charts.push(rate("disk read", series(p, |x| x.diskread)));
+    }
+    if area.width >= 160 {
+        charts.push(rate("disk write", series(p, |x| x.diskwrite)));
+    }
+    let cells = Layout::horizontal(vec![Constraint::Ratio(1, charts.len() as u32); charts.len()]).split(area);
+    for (c, ch) in charts.iter().enumerate() {
+        chart(f, cells[c], ch);
+    }
+}
+
+/// The host's last hour in one row of small graphs: cpu, memory, network and GPU.
+fn strip(f: &mut Frame, app: &App, area: Rect) {
+    if let View::Graph(id) = app.view {
+        return guest_strip(f, app, id, area);
+    }
+    let m: &Model = &app.model;
+    let p = &m.host_rrd;
+    let mut charts = vec![percent("host cpu", series(p, |x| x.cpu * 100.0)), percent("host mem", series(p, |x| ratio(x.mem, x.maxmem)))];
+    if area.width >= 60 {
+        charts.push(rate("net in", series(p, |x| x.netin)));
+    }
+    if area.width >= 100 {
+        charts.push(rate("net out", series(p, |x| x.netout)));
+    }
+    if area.width >= 130 {
+        charts.push(if m.gpu.is_empty() {
+            Chart { title: " gpu: none found ".into(), values: vec![], max: 100.0 }
+        } else {
+            percent("gpu (since start)", m.gpu.iter().map(|v| *v as f64).collect())
+        });
+    }
+    if p.is_empty() {
+        f.render_widget(Paragraph::new(Line::styled(" host graphs: reading... (last hour)", DIM)), area);
+        return;
+    }
+    let cells = Layout::horizontal(vec![Constraint::Ratio(1, charts.len() as u32); charts.len()]).split(area);
+    for (c, ch) in charts.iter().enumerate() {
+        chart(f, cells[c], ch);
     }
 }
 
@@ -444,6 +522,28 @@ mod tests {
         let s = text(&render(&a));
         assert!(s.contains("cpu 98.6%") && s.contains("mem 50.0%") && s.contains("net in 67K/s"), "{s}");
         assert!(s.contains('#'));
+    }
+
+    #[test]
+    fn the_guests_screen_has_a_strip_of_host_graphs_on_a_tall_screen() {
+        use yagura_core::proxmox::rrd::Point;
+        let pts: Vec<Point> =
+            (0..60).map(|i| Point { cpu: i as f64 / 60.0, mem: 5.0, maxmem: 10.0, netin: 1000.0, ..Point::default() }).collect();
+        let mut a = app(View::Guests);
+        a.model.host_rrd = pts;
+        for (w, h) in [(80, 40), (140, 50), (140, 20)] {
+            let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+            t.draw(|f| draw(f, &a)).unwrap();
+            let s = text(t.backend().buffer());
+            assert_eq!(s.contains("host cpu 98.3%"), h >= 30, "{w}x{h}");
+            assert!(s.contains("web"), "{w}x{h}: the guest is still listed");
+        }
+        a.model.guest_rrd.insert(101, (0..60).map(|i| Point { cpu: i as f64 / 60.0, ..Point::default() }).collect());
+        a.view = View::Graph(101);
+        let mut t = Terminal::new(TestBackend::new(140, 50)).unwrap();
+        t.draw(|f| draw(f, &a)).unwrap();
+        let s = text(t.backend().buffer());
+        assert!(s.contains("101 web cpu 98.3%") && s.contains("guests (sort"), "{s}");
     }
 
     #[test]
