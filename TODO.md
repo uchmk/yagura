@@ -23,6 +23,15 @@ v0.1.0 で overview・cpu・mem・procs の 4 枚ができた。残りは下の�
   → `[agent] metrics = "127.0.0.1:9314"`（平文の HTTP、既定は無効）。hub が頼まれたときだけ `metrics.rs` で今の値をテキストにする（v0.49.0）
 - [ ] `/metrics` の実機の確認 【実機】（TESTING.md 3n）。
 
+## 0a. Linux の端末版 `yagura-tui`（Proxmox VE 向け）
+
+- [x] `yagura-core`（egui なしの収集）を分ける（v0.73.23）。
+- [x] `yagura_core::proxmox`（`pvesh` の一覧・コンテナの swap・`pct exec` の中身）と、最初の `yagura-tui`（ゲスト一覧・プロセス・中を見る）。v0.73.30。確認は TESTING.md 3p 【人】（Proxmox のホストが要る）。
+- [ ] ゲストの履歴（rrddata）のグラフ、スナップショット・タスク・設定の表示。
+- [ ] VM の swap（`/run/qemu-server/<id>.pid` → `/proc/<pid>/status` の VmSwap。未確認）。
+- [ ] コンテナの中のアプリの版（community-scripts は `/root/.<appname>`）と GitHub の最新との比較。対応表と 1 時間 60 回の制限のキャッシュが要る。
+- [ ] 配布物に入れる（`release.yml` は ito の共通の写しなので、ito 側で `yagura-tui` を扱えるようにしてから）。
+
 ## 1. 残りの画面（番号は v0.1 で固定済み）
 
 - [x] procs: プロセスの終了（`x`、確認のオーバーレイを挟む。Windows は `TerminateProcess`、ほかは SIGTERM → SIGKILL）。

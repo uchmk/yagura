@@ -1,0 +1,13 @@
+[package]
+name = "yagura-tui"
+version = "0.73.30"
+edition = "2024"
+rust-version = "1.95"
+description = "yagura in the terminal: the host and its Proxmox VE guests on one screen"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/uchmk/yagura"
+
+[dependencies]
+yagura-core = { path = "../yagura-core" }
+ratatui = "0.30"
+crossbeam-channel = "0.5"

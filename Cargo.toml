@@ -1,6 +1,6 @@
 [package]
 name = "yagura"
-version = "0.73.29"
+version = "0.73.30"
 edition = "2024"
 rust-version = "1.95"
 description = "A keyboard-driven system monitor: cores and threads at a glance"
@@ -11,7 +11,7 @@ repository = "https://github.com/uchmk/yagura"
 default-run = "yagura"
 
 [workspace]
-members = [".", "crates/yagura-core"]
+members = [".", "crates/yagura-core", "crates/yagura-tui"]
 
 [dependencies]
 yagura-core = { path = "crates/yagura-core" }

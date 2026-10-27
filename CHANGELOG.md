@@ -6,6 +6,17 @@
 
 ## [未リリース]
 
+## [0.73.30] - 2026-10-28
+
+### 追加
+
+- Linux の端末版 `yagura-tui`（`crates/yagura-tui`、ratatui）の最初の版。Proxmox VE のホストで root で動かし、ホストの CPU・メモリ・swap と、
+  `pvesh` のゲスト一覧（CPU・メモリ・swap・ネットワークの速さ・稼働時間・タグ）を 1 画面に出す。コンテナの swap は cgroup の `memory.swap.current` と
+  `memory.swap.max` から読み、上限の 9 割を超えると赤。Tab でホストのプロセスの一覧、`s` で並べ替え、Enter で選んだコンテナの中を
+  `pct exec` で見る（OS・パッケージ数・更新できる数・再起動の要否。`apt update` は走らせず、リストの古さを添える）。
+  遅い処理は別スレッド。まだ配布物には入れていない（`release.yml` は `yagura` だけ）。
+- `yagura-core` に `proxmox` を足した（`pvesh` の JSON・cgroup・`pct exec` の出力のパースは純粋な関数で、どの OS でもテストが回る）。
+
 ## [0.73.29] - 2026-10-27
 
 ### 変更

@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-232 rows to press (232 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+236 rows to press (236 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -246,6 +246,13 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3n.2** `promtool check metrics < page` (from `curl`) reports no problem; a Prometheus with the address under `static_configs` shows the target `UP` and `yagura_cpu_usage_percent` graphs.
 - [ ] **3n.3** A port already taken makes the agent say `cannot serve metrics on …` and exit 1; with `metrics` left out nothing listens on 9314. On a laptop `yagura_battery_charge_percent` is there; on a desktop it is not. Windows 11 desktop, v0.51.0: a taken port says `cannot serve metrics on …` and exits 1, with `metrics` left out nothing listens, no battery metric on a desktop; the laptop remains.
 - [ ] **3n.4** Watch a machine's containers or procs from a viewer (fleet, `Enter` on its card): its `/metrics` then also holds `yagura_container_*` and `yagura_processes`; after the viewer leaves they go again.
+
+## 3p. Terminal version for Proxmox VE (`yagura-tui`)
+
+- [ ] **3p.1** On a Proxmox VE host as root, `yagura-tui` shows the host's cpu / mem / swap, the node under `pve:`, and one row per guest from `pvesh` (id · ct or vm · name · cpu · mem · swap · net /s · uptime · tags). Stopped guests are dim, templates last. Compare with the web UI.
+- [ ] **3p.2** A container whose swap is at 90% or more of its limit shows the swap cell in red, also on the selected row. `s` cycles id → cpu → mem → swap.
+- [ ] **3p.3** Enter on a running container shows `looking inside…` at once (the keys stay quick), then OS, package count, upgradable count with the age of the apt lists, and `reboot required` where `/var/run/reboot-required` exists. `apt update` is never run. Enter on a VM or a stopped container says why not.
+- [ ] **3p.4** Not as root, or off Proxmox, `pve:` says why (`pvesh failed (root needed?)` / `no pvesh`) and the host part still works. Tab shows the host's processes; `q` restores the terminal.
 
 ## 4. Resizing the columns
 
