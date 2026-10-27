@@ -63,10 +63,18 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
         let swap = g.swap.map_or("-".to_string(), |s| s.max.map_or(bytes(s.used), |max| format!("{}/{}", bytes(s.used), bytes(max))));
         let l1 = Line::from(vec![
             Span::styled(format!(" {} {} ", g.id, g.name), Style::new().add_modifier(Modifier::BOLD)),
-            Span::raw(format!("cpu {}", pct(g.cpu * 100.0))),
+            Span::raw(format!("cpu {} of {} cores", pct(g.cpu * 100.0), g.cpus)),
         ]);
         let l2 = Line::from(format!(" mem {}/{}  swap {swap}  disk {}/{}", bytes(g.mem), bytes(g.maxmem), bytes(g.disk), bytes(g.maxdisk)));
-        let l3 = Line::styled(format!(" on {}", m.host), DIM);
+        let l3 = Line::styled(
+            format!(
+                " node {}  up {}  tags {}",
+                g.node,
+                if g.status == Status::Running { age(g.uptime) } else { "stopped".into() },
+                if g.tags.is_empty() { "-".into() } else { g.tags.join(",") }
+            ),
+            DIM,
+        );
         f.render_widget(Paragraph::new(vec![l1, l2, l3]), area);
         return;
     }
