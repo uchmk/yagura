@@ -6,6 +6,16 @@
 
 ## [未リリース]
 
+## [0.73.29] - 2026-10-27
+
+### 変更
+
+- 収集（`src/collect`）を、egui を使わない別のクレート `yagura-core`（`crates/yagura-core`）に分けた。Linux の端末版（Proxmox 向け）が
+  同じ収集を使うための土台で、画面・キー・設定・既定の動きは変わらない。リポジトリは Cargo のワークスペースになった
+  （`cargo build`・`cargo test` は `--workspace` で回す。`scripts/verify.sh` と `ci.yml` はそうした）。
+  サンプラーの起こし先は `egui::Context` から `Wake`（呼び出す関数）に、ラベルの翻訳は `set_tr` で渡す形に変えた。
+- Proxmox VE の読み取り（`yagura_core::proxmox`、Linux の端末版の元）を足した。`pvesh` の一覧・コンテナの swap（cgroup）・`pct exec` の中身の確認。
+
 ## [0.73.28] - 2026-10-27
 
 ### 変更

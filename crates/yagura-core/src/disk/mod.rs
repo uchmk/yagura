@@ -40,7 +40,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    #[cfg(test)]
     pub const ALL: [Kind; 3] = [Self::Ssd, Self::Hdd, Self::Unknown];
 
     pub fn key(self) -> &'static str {
@@ -79,7 +78,6 @@ pub enum Note {
 }
 
 impl Note {
-    #[cfg(test)]
     pub const ALL: [Note; 4] = [Self::NotRead, Self::CountersOff, Self::NoDiskstats, Self::NoIoKit];
 
     pub fn key(self) -> &'static str {
@@ -101,7 +99,6 @@ pub enum Health {
 }
 
 impl Health {
-    #[cfg(test)]
     pub const ALL: [Health; 2] = [Self::Good, Self::Failing];
 
     pub fn key(self) -> &'static str {
@@ -137,7 +134,6 @@ pub enum Why {
 }
 
 impl Why {
-    #[cfg(test)]
     pub const ALL: [Why; 7] =
         [Self::Pending, Self::Unsupported, Self::NoSmartctl, Self::NeedsRoot, Self::NeedsAdmin, Self::Asleep, Self::NotRead];
 
@@ -263,8 +259,8 @@ pub struct Drive {
     /// The model the drive reports; empty when there is none.
     pub model: String,
     pub kind: Kind,
-    #[serde(deserialize_with = "crate::remote::wire::opt_name")]
-    pub bus: Option<crate::collect::Name>,
+    #[serde(deserialize_with = "crate::wire::opt_name")]
+    pub bus: Option<crate::Name>,
     pub size: Option<u64>,
     pub removable: bool,
     /// Bytes since boot, where the OS keeps a count (not Windows).

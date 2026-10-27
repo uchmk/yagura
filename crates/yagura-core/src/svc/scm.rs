@@ -57,7 +57,7 @@ fn some(s: String) -> Option<String> {
 }
 
 /// Close the handle when dropped. `svcctl` opens services with it too.
-pub(crate) struct Handle(pub(crate) SC_HANDLE);
+pub struct Handle(pub SC_HANDLE);
 
 impl Drop for Handle {
     fn drop(&mut self) {

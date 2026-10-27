@@ -30,7 +30,7 @@ mod zones;
 
 use serde::{Deserialize, Serialize};
 
-use crate::collect::{disk, gpu};
+use crate::{disk, gpu};
 
 /// What a sensor measures.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -45,7 +45,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    #[cfg(test)]
     pub const ALL: [Kind; 3] = [Self::Temp, Self::Fan, Self::Duty];
 
     pub fn key(self) -> &'static str {
@@ -82,7 +81,6 @@ pub enum Note {
 }
 
 impl Note {
-    #[cfg(test)]
     pub const ALL: [Note; 3] = [Self::Empty, Self::ZonesOnly, Self::ThermalOnly];
 
     pub fn key(self) -> &'static str {

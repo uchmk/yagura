@@ -8,7 +8,12 @@ mod affinity;
 mod alert;
 mod app;
 mod bugreport;
-mod collect;
+use yagura_core as collect;
+
+/// The sampler's wake-up call for a window: repaint it.
+fn wake_of(ctx: Option<&egui::Context>) -> collect::Wake {
+    ctx.cloned().map(|c| std::sync::Arc::new(move || c.request_repaint()) as std::sync::Arc<dyn Fn() + Send + Sync>)
+}
 mod config;
 mod envreport;
 mod export;
@@ -424,6 +429,7 @@ fn attach_console() {}
 
 /// This machine's name, for `--key`'s examples.
 fn main() -> eframe::Result {
+    collect::set_tr(|k| i18n::tr(k).to_string());
     let mut args = std::env::args().skip(1).peekable();
     if args.peek().is_some() {
         attach_console();
@@ -642,7 +648,7 @@ fn main() -> eframe::Result {
             fonts::load_in_background(cc.egui_ctx.clone());
             // Tell the other uchmk apps where this exe is; best-effort, off the UI thread.
             std::thread::spawn(|| _ = ito_common::apps::register("yagura", env!("CARGO_PKG_VERSION")));
-            let (rx, ctl) = collect::spawn(Some(cc.egui_ctx.clone()), Duration::from_secs_f32(interval));
+            let (rx, ctl) = collect::spawn(crate::wake_of(Some(&cc.egui_ctx)), Duration::from_secs_f32(interval));
             let mut app = App::new(km, rx, ctl, layouts, saver, interval);
             app.stacks = stacks;
             app.wake = Some(cc.egui_ctx.clone());

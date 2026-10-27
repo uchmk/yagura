@@ -41,7 +41,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    #[cfg(test)]
     pub const ALL: [Kind; 7] = [Self::Wired, Self::Wireless, Self::Bluetooth, Self::Vpn, Self::Virtual, Self::Other, Self::Loopback];
 
     pub fn key(self) -> &'static str {
@@ -263,7 +262,6 @@ pub enum State {
 }
 
 impl State {
-    #[cfg(test)]
     pub const ALL: [State; 12] = [
         Self::Listen,
         Self::Established,
@@ -353,7 +351,6 @@ pub enum Note {
 }
 
 impl Note {
-    #[cfg(test)]
     pub const ALL: [Note; 3] = [Self::OtherUsers, Self::Failed, Self::OtherOs];
 
     pub fn key(self) -> &'static str {
@@ -369,8 +366,8 @@ impl Note {
 pub struct Conns {
     pub list: Vec<Conn>,
     /// `/proc/net`, `iphlpapi`, `netstat`.
-    #[serde(deserialize_with = "crate::remote::wire::name")]
-    pub source: crate::collect::Name,
+    #[serde(deserialize_with = "crate::wire::name")]
+    pub source: crate::Name,
     pub note: Option<Note>,
 }
 

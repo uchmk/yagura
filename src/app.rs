@@ -1870,7 +1870,7 @@ impl App {
                     Ask::Svc(t) => svcctl::spawn(t, self.svc_tx.clone(), self.wake.clone()),
                     Ask::Ct(t) => {
                         self.ct_busy.insert(t.key().to_string());
-                        containers::act::spawn(t, self.ct_tx.clone(), self.wake.clone())
+                        containers::act::spawn(t, self.ct_tx.clone(), crate::wake_of(self.wake.as_ref()))
                     }
                 }
             }

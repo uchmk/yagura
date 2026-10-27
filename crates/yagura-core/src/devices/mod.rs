@@ -47,7 +47,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    #[cfg(test)]
     pub const ALL: [Kind; 14] = [
         Self::Usb,
         Self::Display,
@@ -195,7 +194,7 @@ impl Device {
     /// What the classes column groups it by: the OS's class name, else the
     /// kind's.
     pub fn class(&self) -> String {
-        if self.class_name.is_empty() { crate::i18n::tr(self.kind.key()).to_string() } else { self.class_name.clone() }
+        if self.class_name.is_empty() { crate::tr(self.kind.key()) } else { self.class_name.clone() }
     }
 
     /// The ids as `VID:PID` / `vendor:device`, for the details and the filter.
@@ -224,7 +223,6 @@ pub enum Note {
 }
 
 impl Note {
-    #[cfg(test)]
     pub const ALL: [Note; 5] = [Self::NoSysfs, Self::NoIds, Self::NoSetupApi, Self::NoIoKit, Self::OtherOs];
 
     pub fn key(self) -> &'static str {

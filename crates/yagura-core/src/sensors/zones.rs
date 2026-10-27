@@ -10,7 +10,7 @@ use ::windows::core::{PCWSTR, w};
 
 use super::Sensor;
 use super::windows::fold;
-use crate::collect::pdh::array;
+use crate::pdh::array;
 
 pub struct Reader {
     query: PDH_HQUERY,

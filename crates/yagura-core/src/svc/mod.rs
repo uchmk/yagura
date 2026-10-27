@@ -12,7 +12,7 @@ pub mod linux;
 #[cfg(any(target_os = "macos", test))]
 pub mod mac;
 #[cfg(windows)]
-pub(crate) mod scm;
+pub mod scm;
 #[cfg(any(windows, test))]
 pub mod windows;
 
@@ -120,7 +120,6 @@ pub enum Note {
 }
 
 impl Note {
-    #[cfg(test)]
     pub const ALL: [Note; 5] = [Self::NotRunning, Self::NoSystemctl, Self::MacUser, Self::NoScm, Self::OtherOs];
 
     pub fn key(self) -> &'static str {
@@ -139,8 +138,8 @@ pub struct Services {
     /// By name.
     pub list: Vec<Service>,
     /// `systemd`, `unit files`, `scm`, `launchctl`.
-    #[serde(deserialize_with = "crate::remote::wire::name")]
-    pub source: crate::collect::Name,
+    #[serde(deserialize_with = "crate::wire::name")]
+    pub source: crate::Name,
     pub note: Option<Note>,
 }
 
@@ -189,6 +188,14 @@ impl Reader {
     fn read_os(&mut self) -> Services {
         Services { list: Vec::new(), source: "", note: Some(Note::OtherOs) }
     }
+}
+
+/// What a service (or container) can be asked to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Action {
+    Start,
+    Stop,
+    Restart,
 }
 
 #[cfg(test)]

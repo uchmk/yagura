@@ -62,7 +62,6 @@ pub enum Ecc {
 }
 
 impl Ecc {
-    #[cfg(test)]
     pub const ALL: [Ecc; 5] = [Self::None, Self::Parity, Self::Single, Self::Multi, Self::Crc];
 
     pub fn key(self) -> &'static str {
@@ -136,7 +135,6 @@ pub enum Note {
 }
 
 impl Note {
-    #[cfg(test)]
     pub const ALL: [Note; 3] = [Self::Root, Self::NoTable, Self::Failed];
 
     pub fn key(self) -> &'static str {
@@ -192,13 +190,13 @@ impl Hardware {
 }
 
 /// Read it once on a thread of its own and send it as [`Msg::Hardware`].
-pub fn spawn(tx: Sender<Msg>, wake: Option<egui::Context>) {
+pub fn spawn(tx: Sender<Msg>, wake: crate::Wake) {
     let _ = std::thread::Builder::new().name("yagura-hw".into()).spawn(move || {
         let hw = read();
         if tx.send(Msg::Hardware(Box::new(hw))).is_ok()
             && let Some(w) = wake
         {
-            w.request_repaint();
+            w();
         }
     });
 }

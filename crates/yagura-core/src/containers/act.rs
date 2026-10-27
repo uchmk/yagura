@@ -12,7 +12,7 @@ use crossbeam_channel::Sender;
 use serde_json::Value;
 
 use super::{Endpoint, Runtime, State, candidates, exchange, open, parse_http};
-use crate::svcctl::Action;
+use crate::svc::Action;
 
 /// How long one request may take: a stop waits out the container's own stop
 /// timeout (10 s unless it was given another) before the engine kills it.
@@ -95,7 +95,7 @@ pub fn unpause(t: &Target) -> String {
 /// Run `t` on a thread of its own; the outcome comes back on `tx`. The
 /// engine is asked on yet another, so one that never answers (a named pipe
 /// has no timeout) is reported as slow rather than leaving the toast waiting.
-pub fn spawn(t: Target, tx: Sender<(Target, Outcome)>, wake: Option<egui::Context>) {
+pub fn spawn(t: Target, tx: Sender<(Target, Outcome)>, wake: crate::Wake) {
     let (t2, tx2) = (t.clone(), tx.clone());
     let started = std::thread::Builder::new().name("yagura-ct".into()).spawn(move || {
         let (otx, orx) = std::sync::mpsc::channel();
@@ -114,7 +114,7 @@ pub fn spawn(t: Target, tx: Sender<(Target, Outcome)>, wake: Option<egui::Contex
         };
         let _ = tx.send((t, o));
         if let Some(w) = wake {
-            w.request_repaint();
+            w();
         }
     });
     if let Err(e) = started {

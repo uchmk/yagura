@@ -16,12 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::collect::svc::State;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Action {
-    Start,
-    Stop,
-    Restart,
-}
+pub use yagura_core::svc::Action;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Target {
