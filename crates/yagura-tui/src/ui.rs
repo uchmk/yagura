@@ -285,7 +285,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         View::Host => " Tab guests  q quit",
         View::Guests => " Tab view  j/k move  s sort  Enter graphs  o start  d shutdown  r reboot  q quit",
         View::Procs => " Tab host  j/k move  q quit",
-        View::Graph(_) => " Esc back  j/k move  q quit",
+        View::Graph(_) => " Esc back  j/k move  u upgrade  q quit",
     };
     let text = if app.status.is_empty() { keys.to_string() } else { format!("{keys}   {}", app.status) };
     f.render_widget(Paragraph::new(text).style(DIM), area);
@@ -532,6 +532,13 @@ mod tests {
         let mut a = app(View::Guests);
         a.confirm = Some(crate::Ask { id: 101, name: "web".into(), kind: Kind::Lxc, power: yagura_core::proxmox::Power::Reboot });
         assert!(text(&render(&a)).contains("reboot 101 web (y/n)"));
+    }
+
+    #[test]
+    fn a_pending_upgrade_asks_in_the_footer() {
+        let mut a = app(View::Guests);
+        a.confirm = Some(crate::Ask { id: 101, name: "web".into(), kind: Kind::Lxc, power: yagura_core::proxmox::Power::Upgrade });
+        assert!(text(&render(&a)).contains("upgrade 101 web (y/n)"));
     }
 
     #[test]

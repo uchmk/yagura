@@ -296,6 +296,7 @@ pub enum Power {
     Start,
     Shutdown,
     Reboot,
+    Upgrade,
 }
 
 impl Power {
@@ -304,6 +305,7 @@ impl Power {
             Power::Start => "start",
             Power::Shutdown => "shutdown",
             Power::Reboot => "reboot",
+            Power::Upgrade => "upgrade",
         }
     }
 
@@ -311,7 +313,7 @@ impl Power {
     pub fn fits(self, status: Status) -> bool {
         match self {
             Power::Start => status == Status::Stopped,
-            Power::Shutdown | Power::Reboot => status == Status::Running,
+            Power::Shutdown | Power::Reboot | Power::Upgrade => status == Status::Running,
         }
     }
 }
@@ -324,6 +326,9 @@ pub fn power_command(kind: Kind, id: u32, p: Power) -> (&'static str, [String; 2
 /// Run a power change and wait for it (shutdown can take a while: call it from
 /// a thread of its own). The error is the first line of what the tool said.
 pub fn power(kind: Kind, id: u32, p: Power) -> Result<(), String> {
+    if matches!(p, Power::Upgrade) {
+        return upgrade(kind, id);
+    }
     let (prog, args) = power_command(kind, id, p);
     let o = Command::new(prog).args(args).output().map_err(|e| format!("{prog}: {e}"))?;
     if o.status.success() {
@@ -331,6 +336,31 @@ pub fn power(kind: Kind, id: u32, p: Power) -> Result<(), String> {
     }
     let err = String::from_utf8_lossy(&o.stderr);
     Err(err.lines().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim().to_string())
+}
+
+/// `apt-get update` and `apt-get upgrade` inside a guest, without questions, and wait for them (call it from a
+/// thread of its own). The error is the last line the command said.
+pub fn upgrade(kind: Kind, id: u32) -> Result<(), String> {
+    const SCRIPT: &str =
+        "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get -y -qq -o Dpkg::Options::=--force-confold upgrade";
+    let o = match kind {
+        Kind::Lxc => Command::new("pct").arg("exec").arg(id.to_string()).args(["--", "sh", "-c", SCRIPT]).output(),
+        Kind::Qemu => {
+            Command::new("qm").args(["guest", "exec"]).arg(id.to_string()).args(["--timeout", "1800", "--", "sh", "-c", SCRIPT]).output()
+        }
+    }
+    .map_err(|e| e.to_string())?;
+    let out = String::from_utf8_lossy(&o.stdout);
+    let ok = match kind {
+        Kind::Lxc => o.status.success(),
+        Kind::Qemu => o.status.success() && parse_guest_exec(&out).is_some(),
+    };
+    if ok {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&o.stderr);
+    let say = |t: &str| t.lines().rev().find(|l| !l.trim().is_empty()).map(|l| l.trim().chars().take(80).collect::<String>());
+    Err(say(&err).or_else(|| say(&out)).unwrap_or_else(|| "failed".into()))
 }
 
 /// Look inside a running guest. About two seconds per command, so call it

@@ -69,7 +69,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter graphs  Esc back  o start  d shutdown  r reboot  q quit",
+            "yagura-tui {}\n\nkeys: Tab view  j/k move  s sort  Enter graphs  Esc back  u upgrade  o start  d shutdown  r reboot  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -153,6 +153,13 @@ fn run(
                     app.model.guest_procs.insert(id, p);
                 }
                 Job::Power(id, p, r) => {
+                    if r.is_ok()
+                        && matches!(p, Power::Upgrade)
+                        && let Some(g) = app.model.cluster.guests.iter().find(|g| g.id == id)
+                    {
+                        let kind = g.kind;
+                        start_inspect(&mut app.model, id, kind, jobs_tx);
+                    }
                     app.status = match r {
                         Ok(()) => format!("{id}: {} done", p.verb()),
                         Err(e) => format!("{id}: {} failed: {e}", p.verb()),
@@ -185,6 +192,7 @@ fn run(
             KeyCode::Char('o') if app.view == View::Guests => ask(app, Power::Start),
             KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
             KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
+            KeyCode::Char('u') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Upgrade),
             KeyCode::Esc if matches!(app.view, View::Graph(_)) => {
                 app.view = View::Guests;
                 app.selected = app.guest_sel;
@@ -218,7 +226,12 @@ fn run(
 
 /// Ask for a power change of the selected guest; nothing runs until `y`.
 fn ask(app: &mut App, power: Power) {
-    let Some(g) = app.model.guests(app.sort).get(app.selected).map(|g| (g.id, g.name.clone(), g.kind, g.status, g.template)) else {
+    let guests = app.model.guests(app.sort);
+    let at = match app.view {
+        View::Graph(id) => guests.iter().position(|g| g.id == id),
+        _ => Some(app.selected),
+    };
+    let Some(g) = at.and_then(|i| guests.get(i)).map(|g| (g.id, g.name.clone(), g.kind, g.status, g.template)) else {
         return;
     };
     let (id, name, kind, status, template) = g;

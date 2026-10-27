@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-237 rows to press (237 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+238 rows to press (238 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -254,6 +254,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.3** Without any key, the running containers are looked into in the background (4 at a time): the table fills OS and UPD (upgradable count, `*` when a reboot is required), the pane under the table shows the packages and the age of the apt lists. `apt update` is never run. A VM without a guest agent says `no agent`.
 - [ ] **3p.4** Not as root, or off Proxmox, `pve:` says why (`pvesh failed (root needed?)` / `no pvesh`) and the host part still works. Tab shows the host's processes; `q` restores the terminal.
 - [ ] **3p.5** `yagura-tui` starts on the guests table with a strip of host graphs (about a fifth of the height; cpu, mem, net in/out, gpu since start, as many as the width allows; ASCII bars, no stale cells; no strip below 30 rows). Tab goes guests, processes, host (full-screen graphs), guests. Enter on a guest shows its graphs (cpu, mem, net in/out, disk read/write; the last hour) in the strip and, below it, the processes running inside it (PID, user, CPU%, memory, command; refreshed every 5 s; a container via `pct exec`, a VM through the guest agent, else "no process list"); j/k scrolls the processes, the header lines show that guest (cpu, mem, swap, disk) instead of the host, Esc returns to the guests table on the same guest, `q` quits. Scrolling with the mouse wheel never ends the program.
+- [ ] **3p.6** In the guests table or after Enter on a running container, `u` asks `upgrade <id> <name> (y/n)`; `y` runs `apt-get update` and `apt-get upgrade` inside it (nothing runs without `y`, no snapshot is taken) and the footer says `<id>: upgrade done` (or the last line of the failure), after which the UPD count is read again; a stopped guest says it can not be upgraded.
 
 ## 4. Resizing the columns
 
