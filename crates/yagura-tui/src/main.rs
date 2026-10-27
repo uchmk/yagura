@@ -36,6 +36,11 @@ pub struct App {
     /// When the graphs on screen were last asked for, and whether that is still running.
     pub rrd_at: Option<Instant>,
     pub rrd_busy: bool,
+    /// The same for the processes inside the entered guest.
+    pub procs_at: Option<Instant>,
+    pub procs_busy: bool,
+    /// The guest row that was selected when it was entered.
+    pub guest_sel: usize,
 }
 
 /// What the user asked of a guest, shown until they answer.
@@ -54,6 +59,7 @@ enum Job {
     Latest(String, Option<String>),
     HostRrd(Vec<Point>),
     GuestRrd(u32, Vec<Point>),
+    GuestProcs(u32, Option<Vec<proxmox::GuestProc>>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -81,6 +87,9 @@ fn main() -> std::io::Result<()> {
         confirm: None,
         rrd_at: None,
         rrd_busy: false,
+        procs_at: None,
+        procs_busy: false,
+        guest_sel: 0,
     };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
@@ -139,6 +148,10 @@ fn run(
                     app.rrd_busy = false;
                     app.model.guest_rrd.insert(id, p);
                 }
+                Job::GuestProcs(id, p) => {
+                    app.procs_busy = false;
+                    app.model.guest_procs.insert(id, p);
+                }
                 Job::Power(id, p, r) => {
                     app.status = match r {
                         Ok(()) => format!("{id}: {} done", p.verb()),
@@ -149,19 +162,14 @@ fn run(
         }
         prefetch(app, jobs_tx);
         refresh_rrd(app, jobs_tx);
+        refresh_procs(app, jobs_tx);
         let rows = match app.view {
-            View::Guests | View::Graph(_) => app.model.cluster.guests.len(),
+            View::Guests => app.model.cluster.guests.len(),
+            View::Graph(id) => app.model.guest_procs.get(&id).and_then(|p| p.as_ref()).map_or(0, Vec::len),
             View::Procs => app.model.procs.len(),
             View::Host => 0,
         };
         app.selected = app.selected.min(rows.saturating_sub(1));
-        // The graphs follow the selected guest.
-        if let View::Graph(old) = app.view
-            && let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id).filter(|id| *id != old)
-        {
-            app.view = View::Graph(id);
-            app.rrd_at = None;
-        }
         term.draw(|f| ui::draw(f, app))?;
 
         if !event::poll(Duration::from_millis(250))? {
@@ -174,11 +182,12 @@ fn run(
         }
         match k.code {
             _ if app.confirm.is_some() => answer(app, k.code, jobs_tx),
-            KeyCode::Char('o') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Start),
-            KeyCode::Char('d') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Shutdown),
-            KeyCode::Char('r') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Reboot),
+            KeyCode::Char('o') if app.view == View::Guests => ask(app, Power::Start),
+            KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
+            KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
             KeyCode::Esc if matches!(app.view, View::Graph(_)) => {
                 app.view = View::Guests;
+                app.selected = app.guest_sel;
                 app.rrd_at = None;
                 term.clear()?;
             }
@@ -200,7 +209,7 @@ fn run(
             KeyCode::Char('k') | KeyCode::Up => app.selected = app.selected.saturating_sub(1),
             KeyCode::Char('g') | KeyCode::Home => app.selected = 0,
             KeyCode::Char('G') | KeyCode::End => app.selected = rows.saturating_sub(1),
-            KeyCode::Char('s') => app.sort = app.sort.next(),
+            KeyCode::Char('s') if !matches!(app.view, View::Graph(_)) => app.sort = app.sort.next(),
             KeyCode::Enter if app.view == View::Guests => open_graphs(app),
             _ => {}
         }
@@ -243,6 +252,10 @@ fn answer(app: &mut App, key: KeyCode, tx: &Sender<Job>) {
 fn open_graphs(app: &mut App) {
     let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id) else { return };
     app.status.clear();
+    app.guest_sel = app.selected;
+    app.selected = 0;
+    app.model.guest_procs.remove(&id);
+    app.procs_at = None;
     app.view = View::Graph(id);
     app.rrd_at = None;
 }
@@ -341,4 +354,25 @@ fn apply(m: &mut Model, msg: Msg) {
         Msg::Procs { procs, .. } => m.procs = procs,
         _ => {}
     }
+}
+
+/// How often the processes inside the entered guest are read again.
+const PROCS_EVERY: Duration = Duration::from_secs(5);
+
+/// Read the processes inside the entered guest, on a thread of its own, now and then.
+fn refresh_procs(app: &mut App, tx: &Sender<Job>) {
+    let View::Graph(id) = app.view else { return };
+    if app.procs_busy || app.procs_at.is_some_and(|t| t.elapsed() < PROCS_EVERY) {
+        return;
+    }
+    let Some(kind) = app.model.cluster.guests.iter().find(|g| g.id == id).map(|g| g.kind) else { return };
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-ps".into())
+        .spawn(move || {
+            let _ = tx.send(Job::GuestProcs(id, proxmox::processes(kind, id)));
+        })
+        .expect("spawn the ps thread");
+    app.procs_busy = true;
+    app.procs_at = Some(Instant::now());
 }

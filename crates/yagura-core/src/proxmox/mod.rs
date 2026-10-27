@@ -491,3 +491,52 @@ VmSwap:	   2048 kB
         assert_eq!(parse_osinfo("x"), (None, false));
     }
 }
+
+/// One process inside a guest, as `ps` reports it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GuestProc {
+    pub pid: u32,
+    pub user: String,
+    pub cpu: f32,
+    /// Resident memory in bytes.
+    pub mem: u64,
+    pub name: String,
+}
+
+/// The output of `ps -eo pid,user:16,pcpu,rss,args`; lines that do not read as a process (the header) are skipped.
+pub fn parse_ps(text: &str) -> Vec<GuestProc> {
+    text.lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let pid = it.next()?.parse().ok()?;
+            let user = it.next()?.to_string();
+            let cpu = it.next()?.parse().ok()?;
+            let rss: u64 = it.next()?.parse().ok()?;
+            let name = it.collect::<Vec<_>>().join(" ");
+            Some(GuestProc { pid, user, cpu, mem: rss * 1024, name })
+        })
+        .collect()
+}
+
+/// The processes of a running guest, busiest first; `None` when it can not be asked (no agent, not Linux).
+/// Slow: call it from a thread of its own.
+pub fn processes(kind: Kind, id: u32) -> Option<Vec<GuestProc>> {
+    let out = exec(kind, id, &["ps", "-eo", "pid,user:16,pcpu,rss,args", "--sort=-pcpu"])?;
+    let v = parse_ps(&out);
+    (!v.is_empty()).then_some(v)
+}
+
+#[cfg(test)]
+mod ps_tests {
+    use super::*;
+
+    #[test]
+    fn ps_lines_become_processes_and_the_header_does_not() {
+        let t = "    PID USER             %CPU   RSS COMMAND\n      1 root              0.0  4096 /sbin/init splash\n  120 www-data       12.5 20480 nginx: worker\n";
+        let p = parse_ps(t);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[1], GuestProc { pid: 120, user: "www-data".into(), cpu: 12.5, mem: 20480 * 1024, name: "nginx: worker".into() });
+        assert_eq!(p[0].name, "/sbin/init splash");
+        assert!(parse_ps("nonsense").is_empty());
+    }
+}

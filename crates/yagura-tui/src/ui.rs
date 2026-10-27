@@ -24,9 +24,9 @@ const DIM: Style = Style::new().fg(Color::DarkGray);
 pub fn draw(f: &mut Frame, app: &App) {
     // About a fifth of the height for graphs above the guests (the host's, or the entered guest's), when the screen is tall enough to spare it.
     let tall = f.area().height >= 30;
-    let table = app.view == View::Guests || (tall && matches!(app.view, View::Graph(_)));
+    let table = app.view == View::Guests;
     let inside_h = if table { 7 } else { 0 };
-    let strip_h = if table { (f.area().height / 5).clamp(6, 12) } else { 0 };
+    let strip_h = if tall && (table || matches!(app.view, View::Graph(_))) { (f.area().height / 5).clamp(6, 12) } else { 0 };
     let [head, strip_area, body, detail, foot] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(strip_h),
@@ -36,15 +36,14 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .areas(f.area());
     header(f, app, head);
-    if strip_h > 0 && tall {
+    if strip_h > 0 {
         strip(f, app, strip_area);
     }
     match app.view {
         View::Guests => guests(f, app, body),
         View::Procs => procs(f, app, body),
         View::Host => host_graphs(f, app, body),
-        View::Graph(_) if table => guests(f, app, body),
-        View::Graph(id) => guest_graphs(f, app, id, body),
+        View::Graph(id) => guest_procs(f, app, id, body),
     }
     if table {
         inside(f, app, detail);
@@ -197,6 +196,39 @@ fn procs(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(t, area, &mut st);
 }
 
+/// The processes inside the entered guest.
+fn guest_procs(f: &mut Frame, app: &App, id: u32, area: Rect) {
+    let m = &app.model;
+    let name = m.cluster.guests.iter().find(|g| g.id == id).map_or(String::new(), |g| g.name.clone());
+    let title = format!(" processes in {id} {name} ");
+    let list = match m.guest_procs.get(&id) {
+        None => {
+            f.render_widget(Paragraph::new(Line::styled(" reading...", DIM)).block(Block::new().borders(Borders::TOP).title(title)), area);
+            return;
+        }
+        Some(None) => {
+            let why = " no process list (needs a running Linux guest; a VM needs the guest agent)";
+            f.render_widget(Paragraph::new(Line::styled(why, DIM)).block(Block::new().borders(Borders::TOP).title(title)), area);
+            return;
+        }
+        Some(Some(l)) => l,
+    };
+    let rows = list.iter().map(|p| {
+        Row::new([
+            Cell::from(p.pid.to_string()),
+            Cell::from(p.user.clone()),
+            Cell::from(format!("{:6.1}", p.cpu)),
+            Cell::from(bytes(p.mem)),
+            Cell::from(p.name.clone()),
+        ])
+    });
+    let head = Row::new(["PID", "USER", "CPU%", "MEM", "COMMAND"]).style(Style::new().add_modifier(Modifier::BOLD));
+    let widths = [Constraint::Length(8), Constraint::Length(16), Constraint::Length(7), Constraint::Length(8), Constraint::Min(10)];
+    let t = Table::new(rows, widths).header(head).block(Block::new().borders(Borders::TOP).title(title)).row_highlight_style(SELECTED);
+    let mut st = TableState::default().with_selected(Some(app.selected));
+    f.render_stateful_widget(t, area, &mut st);
+}
+
 /// The container under the cursor, as `pct exec` found it.
 fn inside(f: &mut Frame, app: &App, area: Rect) {
     let m = &app.model;
@@ -232,7 +264,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         View::Host => " Tab guests  q quit",
         View::Guests => " Tab view  j/k move  s sort  Enter graphs  o start  d shutdown  r reboot  q quit",
         View::Procs => " Tab host  j/k move  q quit",
-        View::Graph(_) => " Esc host graphs  j/k other guest  o start  d shutdown  r reboot  q quit",
+        View::Graph(_) => " Esc back  j/k move  q quit",
     };
     let text = if app.status.is_empty() { keys.to_string() } else { format!("{keys}   {}", app.status) };
     f.render_widget(Paragraph::new(text).style(DIM), area);
@@ -384,27 +416,6 @@ fn host_graphs(f: &mut Frame, app: &App, area: Rect) {
     grid(f, area, &charts);
 }
 
-/// One guest's last hour. Proxmox keeps no GPU figures, so there is no GPU graph.
-fn guest_graphs(f: &mut Frame, app: &App, id: u32, area: Rect) {
-    let m: &Model = &app.model;
-    let name = m.cluster.guests.iter().find(|g| g.id == id).map_or(String::new(), |g| g.name.clone());
-    let [title, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
-    f.render_widget(Paragraph::new(Line::styled(format!(" {id} {name}  (last hour, Esc back; no GPU figures in Proxmox)"), DIM)), title);
-    let Some(p) = m.guest_rrd.get(&id).filter(|p| !p.is_empty()) else {
-        f.render_widget(Paragraph::new(Line::styled(" reading...", DIM)), rest);
-        return;
-    };
-    let mut charts = vec![percent("cpu", series(p, |x| x.cpu * 100.0)), percent("mem", series(p, |x| ratio(x.mem, x.maxmem)))];
-    if p.iter().any(|x| x.maxdisk > 0.0) {
-        charts.push(percent("disk used", series(p, |x| ratio(x.disk, x.maxdisk))));
-    }
-    charts.push(rate("disk read", series(p, |x| x.diskread)));
-    charts.push(rate("disk write", series(p, |x| x.diskwrite)));
-    charts.push(rate("net in", series(p, |x| x.netin)));
-    charts.push(rate("net out", series(p, |x| x.netout)));
-    grid(f, rest, &charts);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,7 +437,19 @@ mod tests {
             }],
             ..Cluster::default()
         };
-        App { model, view, sort: Sort::Id, selected: 0, status: String::new(), confirm: None, rrd_at: None, rrd_busy: false }
+        App {
+            model,
+            view,
+            sort: Sort::Id,
+            selected: 0,
+            status: String::new(),
+            confirm: None,
+            rrd_at: None,
+            rrd_busy: false,
+            procs_at: None,
+            procs_busy: false,
+            guest_sel: 0,
+        }
     }
 
     fn render(a: &App) -> Buffer {
@@ -519,7 +542,9 @@ mod tests {
         }
         let mut a = app(View::Graph(101));
         a.model.guest_rrd.insert(101, pts);
-        let s = text(&render(&a));
+        let mut t = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        t.draw(|f| draw(f, &a)).unwrap();
+        let s = text(t.backend().buffer());
         assert!(s.contains("cpu 98.6%") && s.contains("mem 50.0%") && s.contains("net in 67K/s"), "{s}");
         assert!(s.contains('#'));
     }
@@ -543,7 +568,24 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(140, 50)).unwrap();
         t.draw(|f| draw(f, &a)).unwrap();
         let s = text(t.backend().buffer());
-        assert!(s.contains("101 web cpu 98.3%") && s.contains("guests (sort"), "{s}");
+        assert!(s.contains("101 web cpu 98.3%") && s.contains("processes in 101 web"), "{s}");
+    }
+
+    #[test]
+    fn a_guest_shows_its_processes() {
+        use yagura_core::proxmox::GuestProc;
+        let mut a = app(View::Graph(101));
+        for h in [6, 20, 40] {
+            let mut t = Terminal::new(TestBackend::new(100, h)).unwrap();
+            t.draw(|f| draw(f, &a)).unwrap();
+            assert!(text(t.backend().buffer()).contains("reading"), "{h}");
+        }
+        a.model.guest_procs.insert(101, None);
+        assert!(text(&render(&a)).contains("no process list"));
+        let p = GuestProc { pid: 7, user: "root".into(), cpu: 1.5, mem: 2048, name: "nginx -g daemon".into() };
+        a.model.guest_procs.insert(101, Some(vec![p]));
+        let s = text(&render(&a));
+        assert!(s.contains("nginx") && s.contains("root"), "{s}");
     }
 
     #[test]

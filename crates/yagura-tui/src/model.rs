@@ -75,6 +75,8 @@ pub struct Model {
     /// The last hour of the node and of the guests whose graphs were opened.
     pub host_rrd: Vec<Point>,
     pub guest_rrd: HashMap<u32, Vec<Point>>,
+    /// What runs inside the guest being looked at; `None` when it can not be asked.
+    pub guest_procs: HashMap<u32, Option<Vec<yagura_core::proxmox::GuestProc>>>,
     last: HashMap<u32, (u64, u64, Instant)>,
 }
 
