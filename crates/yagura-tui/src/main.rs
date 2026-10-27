@@ -175,7 +175,8 @@ fn run(
                 app.rrd_at = None;
                 term.clear()?;
             }
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+            // Esc does not quit: a wheel turn arrives as ESC [ B, and a split read looks like a lone Esc.
+            KeyCode::Char('q') => return Ok(()),
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
             KeyCode::Tab if !matches!(app.view, View::Graph(_)) => {
                 app.view = match app.view {
