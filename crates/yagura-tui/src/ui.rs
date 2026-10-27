@@ -310,16 +310,29 @@ struct Chart {
     values: Vec<f64>,
     /// The value a full bar stands for; 0 means the largest value seen.
     max: f64,
+    /// How far back the leftmost column reaches, shown under the graph.
+    span: &'static str,
+    percent: bool,
 }
 
 fn percent(label: &str, values: Vec<f64>) -> Chart {
     let last = values.last().copied().unwrap_or(0.0);
-    Chart { title: format!(" {label} {last:.1}% "), values, max: 100.0 }
+    Chart { title: format!(" {label} {last:.1}% "), values, max: 100.0, span: "1h", percent: true }
 }
 
 fn rate(label: &str, values: Vec<f64>) -> Chart {
     let last = values.last().copied().unwrap_or(0.0);
-    Chart { title: format!(" {label} {}/s ", bytes(last as u64)), values, max: 0.0 }
+    Chart { title: format!(" {label} {}/s ", bytes(last as u64)), values, max: 0.0, span: "1h", percent: false }
+}
+
+fn gpu_chart(values: &[f32]) -> Chart {
+    let mut c = percent("gpu", values.iter().map(|v| *v as f64).collect());
+    c.span = "5m";
+    c
+}
+
+fn no_gpu() -> Chart {
+    Chart { title: " gpu: none found ".into(), values: vec![], max: 100.0, span: "5m", percent: true }
 }
 
 fn ratio(a: f64, b: f64) -> f64 {
@@ -345,14 +358,41 @@ fn grid(f: &mut Frame, area: Rect, charts: &[Chart]) {
 
 /// One boxed graph.
 fn chart(f: &mut Frame, area: Rect, ch: &Chart) {
-    let block = Block::new().borders(Borders::ALL).title(ch.title.clone());
+    let max = if ch.percent {
+        // A full bar is the peak rounded up, so a quiet graph still has a shape; the scale is printed on the box.
+        let peak = ch.values.iter().copied().fold(0.0, f64::max);
+        [10.0, 20.0, 25.0, 50.0, 100.0].into_iter().find(|n| peak <= *n).unwrap_or(100.0)
+    } else if ch.max > 0.0 {
+        ch.max
+    } else {
+        ch.values.iter().copied().fold(1.0, f64::max)
+    };
+    let scale = if ch.percent { format!(" full = {max:.0}% ") } else { format!(" full = {}/s ", bytes(max as u64)) };
+    let mut block = Block::new().borders(Borders::ALL).title(ch.title.clone());
+    if ch.title.chars().count() + scale.chars().count() + 2 <= area.width as usize {
+        block = block.title(Line::from(scale).right_aligned());
+    }
+    if !ch.values.is_empty() {
+        block = block.title_bottom(Line::from(format!(" -{} ", ch.span)).left_aligned()).title_bottom(Line::from(" now ").right_aligned());
+    }
     let inner = block.inner(area);
     f.render_widget(block, area);
-    // The newest values that fit; the widget draws from the left.
-    let skip = ch.values.len().saturating_sub(inner.width as usize);
-    let max = if ch.max > 0.0 { ch.max } else { ch.values.iter().copied().fold(1.0, f64::max) };
-    let data: Vec<u64> = ch.values[skip..].iter().map(|v| (v / max * 1000.0).clamp(0.0, 1000.0) as u64).collect();
-    f.render_widget(Sparkline::default().data(&data).max(1000).bar_set(BARS), inner);
+    // Every column is the average of its share of the series, so the whole span always fits the box.
+    let (w, n) = (inner.width as usize, ch.values.len());
+    let data: Vec<u64> = if n == 0 || w == 0 {
+        Vec::new()
+    } else {
+        (0..w)
+            .map(|c| {
+                let a = (c * n / w).min(n - 1);
+                let b = ((c + 1) * n / w).clamp(a + 1, n);
+                let s = &ch.values[a..b];
+                let v = s.iter().sum::<f64>() / s.len() as f64;
+                (v / max * 1000.0).clamp(0.0, 1000.0) as u64
+            })
+            .collect()
+    };
+    f.render_widget(Sparkline::default().data(&data).max(1000).bar_set(BARS).style(Style::new().fg(Color::Cyan)), inner);
 }
 
 /// The entered guest's last hour in the same strip: cpu, memory, network, disk.
@@ -398,11 +438,7 @@ fn strip(f: &mut Frame, app: &App, area: Rect) {
         charts.push(rate("net out", series(p, |x| x.netout)));
     }
     if area.width >= 130 {
-        charts.push(if m.gpu.is_empty() {
-            Chart { title: " gpu: none found ".into(), values: vec![], max: 100.0 }
-        } else {
-            percent("gpu (since start)", m.gpu.iter().map(|v| *v as f64).collect())
-        });
+        charts.push(if m.gpu.is_empty() { no_gpu() } else { gpu_chart(&m.gpu.iter().copied().collect::<Vec<f32>>()) });
     }
     if p.is_empty() {
         f.render_widget(Paragraph::new(Line::styled(" host graphs: reading... (last hour)", DIM)), area);
@@ -427,9 +463,9 @@ fn host_graphs(f: &mut Frame, app: &App, area: Rect) {
         rate("net out", series(p, |x| x.netout)),
     ];
     if m.gpu.is_empty() {
-        charts.push(Chart { title: " gpu: none found ".into(), values: vec![], max: 100.0 });
+        charts.push(no_gpu());
     } else {
-        charts.push(percent("gpu (since start)", m.gpu.iter().map(|v| *v as f64).collect()));
+        charts.push(gpu_chart(&m.gpu.iter().copied().collect::<Vec<f32>>()));
     }
     if p.is_empty() {
         charts.truncate(6);
