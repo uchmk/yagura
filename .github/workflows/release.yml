@@ -10,7 +10,7 @@ name: Release
 # the last one has its tag: the notes start from the previous tag, and one not
 # made yet sends them back a release further, repeating it.
 #
-# Six files on two jobs: Windows builds both its architectures on the one x64
+# Six files on two jobs (eight with a terminal version, on a third): Windows builds both its architectures on the one x64
 # runner; macOS and Linux build where they run, after the Windows job has made
 # the release.
 
@@ -241,10 +241,61 @@ jobs:
           files: dist/*.tar.gz
           fail_on_unmatched_files: true
 
+  # The terminal version, for apps whose lanes.conf has tui_crate and tui_bin
+  # (the job is skipped otherwise): Linux only, as a second pair of .tar.gz
+  # beside the app's own, because a server has no window to open.
+  tui:
+    needs: windows
+    if: ${{ 'yagura-tui' != '' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    name: tui ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the tag
+        id: tag
+        run: echo "name=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Add the target
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tui-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked -p yagura-tui --target ${{ matrix.target }}
+
+      - name: Pack
+        run: |
+          tag="${{ steps.tag.outputs.name }}"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/yagura-tui" .
+          tar -czf "dist/yagura-tui-$tag-${{ matrix.name }}.tar.gz" yagura-tui LICENSE-MIT LICENSE-APACHE
+          ls -l dist
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          files: dist/*.tar.gz
+          fail_on_unmatched_files: true
+
   # Every asset's SHA-256, and each Windows zip's files, onto the release
   # page once all six are there (release-sums.yml; also runs by hand).
   sums:
-    needs: [windows, unix]
+    needs: [windows, unix, tui]
     if: always() && needs.windows.result == 'success'
     uses: ./.github/workflows/release-sums.yml
     with:

@@ -6,6 +6,13 @@
 
 ## [未リリース]
 
+## [0.73.32] - 2026-10-27
+
+### 変更
+
+- ito の `rev` を 2e3e12b（ito v0.123.0）に上げ、`scripts/lanes.conf` に `tui_crate=yagura-tui` と `tui_bin=yagura-tui` を足して `lanes.sh sync` した。
+  リリースの成果物に `yagura-tui-<tag>-linux-{x64,arm64}.tar.gz` が加わり、全部で 8 つになる（`release-check.sh` も 8 つを見る）。
+
 ## [0.73.31] - 2026-10-27
 
 ### 変更

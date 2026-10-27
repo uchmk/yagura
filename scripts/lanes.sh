@@ -18,7 +18,8 @@
 # the ones the app takes when it does not take them all; this file always.
 #
 # Workflows: ito's scripts/lanes/workflows/*.yml are templates with {{app}},
-# {{crate}} and {{bin}} (lanes.conf's values). lanes.conf's `workflows=` names
+# {{crate}} and {{bin}} (lanes.conf's values; {{tui_crate}} and {{tui_bin}} too,
+# empty unless the app has a terminal version). lanes.conf's `workflows=` names
 # the ones the app takes; sync writes them to .github/workflows/ with a header
 # line, and check fails when a written copy differs. An app that names none
 # keeps its own workflows.
@@ -58,7 +59,7 @@ done
 # One workflow, as it is written for this app.
 render() {
     echo "# Source is uchmk/ito scripts/lanes/workflows/$1; written by scripts/lanes.sh sync, so edit ito's."
-    sed -e "s/{{app}}/$(conf app)/g" -e "s/{{crate}}/$(conf crate)/g" -e "s/{{bin}}/$(conf bin)/g" "$src/workflows/$1"
+    sed -e "s/{{app}}/$(conf app)/g" -e "s/{{crate}}/$(conf crate)/g" -e "s/{{bin}}/$(conf bin)/g" -e "s/{{tui_crate}}/$(conf tui_crate)/g" -e "s/{{tui_bin}}/$(conf tui_bin)/g" "$src/workflows/$1"
 }
 
 case "${1:-}" in

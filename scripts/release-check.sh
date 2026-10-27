@@ -15,10 +15,13 @@ out=$(gh release view "$tag" --repo "$repo" --json tagName 2>&1) || { echo "NG  
 names=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' | grep -E '\.(zip|tar\.gz)$' | sort)
 body=$(gh release view "$tag" --repo "$repo" --json body --jq .body)
 
-# 1. Six assets: Windows x64 / ARM64 (.zip), macOS and Linux x64 / ARM64 (.tar.gz).
+# 1. Six assets: Windows x64 / ARM64 (.zip), macOS and Linux x64 / ARM64 (.tar.gz);
+# two more (Linux .tar.gz) when lanes.conf has tui_bin.
+want=6; tar=4
+if [ -n "$(sed -n 's/^tui_bin=//p' scripts/lanes.conf 2>/dev/null | head -n 1)" ]; then want=8; tar=6; fi
 n=$(printf '%s\n' "$names" | grep -c . || true)
 zips=$(printf '%s\n' "$names" | grep -c '\.zip$' || true)
-if [ "$n" -eq 6 ] && [ "$zips" -eq 2 ]; then say OK "assets: 6 (2 zip + 4 tar.gz)"; else say NG "assets: $n ($zips zip); want 6 = 2 zip + 4 tar.gz"; fi
+if [ "$n" -eq "$want" ] && [ "$zips" -eq 2 ]; then say OK "assets: $want (2 zip + $tar tar.gz)"; else say NG "assets: $n ($zips zip); want $want = 2 zip + $tar tar.gz"; fi
 
 # 2. The SHA-256 table (release-sums.yml, called from release.yml or run by hand)
 # is in the notes, with a row for every asset. Without it, run the workflow.

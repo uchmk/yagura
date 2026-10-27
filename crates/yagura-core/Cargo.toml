@@ -1,6 +1,6 @@
 [package]
 name = "yagura-core"
-version = "0.73.30"
+version = "0.73.32"
 edition = "2024"
 rust-version = "1.95"
 description = "yagura's collectors: what the machine is doing, without any UI"
@@ -14,7 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-ito-common = { git = "https://github.com/uchmk/ito", rev = "e6e046fc028efcee0c5785e099114aaa51d1e0c3" }
+ito-common = { git = "https://github.com/uchmk/ito", rev = "2e3e12b2717fe2110ebced15c2677450b7df6b0d" }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 nvml-wrapper = { version = "0.13", default-features = false }
@@ -30,7 +30,7 @@ libc = "0.2"
 libc = "0.2"
 
 [dev-dependencies]
-ito-i18n = { git = "https://github.com/uchmk/ito", rev = "e6e046fc028efcee0c5785e099114aaa51d1e0c3" }
+ito-i18n = { git = "https://github.com/uchmk/ito", rev = "2e3e12b2717fe2110ebced15c2677450b7df6b0d" }
 plist = { version = "1.8", default-features = false }
 
 [target.'cfg(windows)'.dependencies]

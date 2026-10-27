@@ -30,7 +30,7 @@ v0.1.0 で overview・cpu・mem・procs の 4 枚ができた。残りは下の�
 - [ ] ゲストの履歴（rrddata）のグラフ、スナップショット・タスク・設定の表示。
 - [ ] VM の swap（`/run/qemu-server/<id>.pid` → `/proc/<pid>/status` の VmSwap。未確認）。
 - [ ] コンテナの中のアプリの版（community-scripts は `/root/.<appname>`）と GitHub の最新との比較。対応表と 1 時間 60 回の制限のキャッシュが要る。
-- [ ] 配布物に入れる（`release.yml` は ito の共通の写しなので、ito 側で `yagura-tui` を扱えるようにしてから）。
+- [x] 配布物に入れる（v0.73.32: ito の `release.yml` が `yagura-tui` を扱うようになり、`lanes.conf` の `tui_crate` / `tui_bin` で入れた。次のリリースで 8 つの成果物になる）。
 
 ## 1. 残りの画面（番号は v0.1 で固定済み）
 
