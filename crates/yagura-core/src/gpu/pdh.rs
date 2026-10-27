@@ -12,7 +12,7 @@ use ::windows::core::{Interface, PCWSTR, w};
 
 use super::windows::{Adapter, fold, luid_name, umd_version};
 use super::{Device, vendor_name};
-use crate::collect::pdh::array;
+use crate::pdh::array;
 
 pub struct Reader {
     query: PDH_HQUERY,

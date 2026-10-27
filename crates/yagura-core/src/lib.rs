@@ -6,6 +6,49 @@
 //! receiver ends the thread. The hardware (`hw`) is read once on a thread of
 //! its own.
 
+// The samplers are built with `new` on the thread that owns them; a `Default`
+// would invite building them anywhere.
+#![allow(clippy::new_without_default)]
+
+/// What the sampler calls after every message so a window can redraw (the
+/// agent has no window and passes `None`).
+pub type Wake = Option<std::sync::Arc<dyn Fn() + Send + Sync>>;
+
+/// The words a reading shows: a hook for the UI's language table. Without
+/// one, the key itself.
+#[cfg(not(test))]
+static TR: std::sync::OnceLock<fn(&str) -> String> = std::sync::OnceLock::new();
+
+/// Let the UI's translation table word the labels the collectors make.
+pub fn set_tr(f: fn(&str) -> String) {
+    #[cfg(not(test))]
+    let _ = TR.set(f);
+    #[cfg(test)]
+    let _ = f;
+}
+
+#[cfg(test)]
+pub(crate) fn tr(key: &str) -> String {
+    i18n::tr(key).to_string()
+}
+
+#[cfg(not(test))]
+pub(crate) fn tr(key: &str) -> String {
+    TR.get().map_or_else(|| key.to_string(), |f| f(key))
+}
+
+/// The English table, so the tests can check that every label has a word.
+#[cfg(test)]
+pub(crate) mod i18n {
+    use std::sync::OnceLock;
+
+    static EN: OnceLock<ito_i18n::Table> = OnceLock::new();
+
+    pub fn tr(key: &str) -> &str {
+        EN.get_or_init(|| ito_i18n::Table::new(&[("en", include_str!("../../../src/lang/en.toml"))], "en").0).tr(key)
+    }
+}
+
 pub mod battery;
 pub mod containers;
 pub mod devices;
@@ -19,6 +62,8 @@ pub mod sensors;
 pub mod session;
 pub mod svc;
 pub mod topo;
+pub mod util;
+pub mod wire;
 #[cfg(windows)]
 mod wmi;
 #[cfg(windows)]
@@ -196,7 +241,7 @@ fn ct_gap(wanted: bool) -> Duration {
 
 /// Start the sampler; `wake` is repainted after every message (the agent has
 /// no window and passes `None`).
-pub fn spawn(wake: Option<egui::Context>, interval: Duration) -> (Receiver<Msg>, Sender<Ctl>) {
+pub fn spawn(wake: crate::Wake, interval: Duration) -> (Receiver<Msg>, Sender<Ctl>) {
     let (tx, rx) = unbounded();
     let (ctl_tx, ctl_rx) = unbounded();
     hw::spawn(tx.clone(), wake.clone());
@@ -207,11 +252,11 @@ pub fn spawn(wake: Option<egui::Context>, interval: Duration) -> (Receiver<Msg>,
     (rx, ctl_tx)
 }
 
-fn run(tx: &Sender<Msg>, ctl: &Receiver<Ctl>, wake: &Option<egui::Context>, mut interval: Duration) {
+fn run(tx: &Sender<Msg>, ctl: &Receiver<Ctl>, wake: &crate::Wake, mut interval: Duration) {
     let send = |m: Msg| {
         let ok = tx.send(m).is_ok();
         if let Some(w) = wake {
-            w.request_repaint();
+            w();
         }
         ok
     };

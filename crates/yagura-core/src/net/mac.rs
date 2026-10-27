@@ -162,7 +162,7 @@ pub fn conns() -> super::Conns {
         return Conns { list: Vec::new(), source: "netstat", note: Some(Note::Failed) };
     };
     let list = netstat(&text);
-    let note = (hidden(&list) && !crate::collect::svc::mac::root()).then_some(Note::OtherUsers);
+    let note = (hidden(&list) && !crate::svc::mac::root()).then_some(Note::OtherUsers);
     Conns { list, source: "netstat", note }
 }
 

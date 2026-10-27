@@ -98,7 +98,6 @@ pub enum Why {
 }
 
 impl Why {
-    #[cfg(test)]
     pub const ALL: [Why; 15] = [
         Self::NoNvml,
         Self::NoBusy,
@@ -156,8 +155,8 @@ pub struct Device {
     /// As the driver names it; empty when it does not, and the screen says
     /// "vendor GPU" instead.
     pub name: String,
-    #[serde(deserialize_with = "crate::remote::wire::opt_name")]
-    pub vendor: Option<crate::collect::Name>,
+    #[serde(deserialize_with = "crate::wire::opt_name")]
+    pub vendor: Option<crate::Name>,
     /// `1002:744c` where the PCI ids are known.
     pub pci: Option<String>,
     /// The PCI address, `0000:03:00.0`, where it is known (Linux, NVML).
@@ -165,8 +164,8 @@ pub struct Device {
     pub driver: Option<String>,
     /// Where the readings came from: `sysfs`, `sysfs+fdinfo`, `pdh`,
     /// `pdh+d3dkmt`, `nvml`, `pdh+nvml`, `iokit`.
-    #[serde(deserialize_with = "crate::remote::wire::name")]
-    pub source: crate::collect::Name,
+    #[serde(deserialize_with = "crate::wire::name")]
+    pub source: crate::Name,
     /// Percent, the busiest engine's.
     pub usage: Option<f32>,
     /// Per engine type, percent, in a fixed order.

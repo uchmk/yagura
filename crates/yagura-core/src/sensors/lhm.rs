@@ -70,7 +70,7 @@ mod wmi {
     use ::windows::Win32::System::Wmi::IWbemServices;
 
     use super::{Row, Sensor, fold};
-    use crate::collect::wmi::{self as w, number, rows, text};
+    use crate::wmi::{self as w, number, rows, text};
 
     /// How long to wait before looking for the tool again.
     const RETRY: Duration = Duration::from_secs(10);

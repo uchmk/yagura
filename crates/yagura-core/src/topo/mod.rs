@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::i18n::tr;
+use crate::tr;
 
 #[cfg(any(target_os = "linux", test))]
 pub mod linux;
@@ -68,8 +68,8 @@ pub struct Topology {
     /// Where it came from: `sysfs`, `win32`, `iokit` or `sysctl` (macOS), or
     /// `fallback` when the OS said
     /// nothing usable and each logical CPU is drawn as a core of its own.
-    #[serde(deserialize_with = "crate::remote::wire::name")]
-    pub source: crate::collect::Name,
+    #[serde(deserialize_with = "crate::wire::name")]
+    pub source: crate::Name,
 }
 
 impl Topology {
@@ -100,7 +100,7 @@ type Placed = (Vec<usize>, CoreKind, Vec<usize>, Option<u64>);
 pub fn fallback(logical: usize) -> Topology {
     let cores = (0..logical).map(|i| Core { id: i, threads: vec![i], kind: CoreKind::Unknown }).collect();
     Topology {
-        groups: vec![Group { label: tr("topo.cpu").into(), cache: 3, cache_kb: None, kind: CoreKind::Unknown, cores }],
+        groups: vec![Group { label: tr("topo.cpu"), cache: 3, cache_kb: None, kind: CoreKind::Unknown, cores }],
         logical,
         source: "fallback",
     }

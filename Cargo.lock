@@ -4864,6 +4864,27 @@ dependencies = [
  "sysinfo",
  "toml",
  "windows",
+ "yagura-core",
+]
+
+[[package]]
+name = "yagura-core"
+version = "0.73.22"
+dependencies = [
+ "chrono",
+ "crossbeam-channel",
+ "ito-common",
+ "ito-i18n",
+ "libc",
+ "nvml-wrapper",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "plist",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "toml",
+ "windows",
 ]
 
 [[package]]

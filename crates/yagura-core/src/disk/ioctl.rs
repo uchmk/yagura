@@ -31,7 +31,7 @@ use super::windows::{
     ATA_DATA_LEN, Info, describe, fold, nvme_query, nvme_reply, parse_instance, predict, smart_query, smart_reply, temperature, why_of,
 };
 use super::{Drive, Health, Kind, Smart, Temp, Why, ata_attrs, nvme_log};
-use crate::collect::pdh::array;
+use crate::pdh::array;
 
 /// How often a solid-state drive's temperature is asked.
 const TEMP_EVERY: Duration = Duration::from_secs(5);

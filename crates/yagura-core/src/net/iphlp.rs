@@ -21,7 +21,7 @@ use windows::core::{PCWSTR, PWSTR, w};
 
 use super::windows::{self as fold, Row};
 use super::{Conn, Conns, Nic, Note, Proto};
-use crate::collect::wmi;
+use crate::wmi;
 
 fn wide(s: &[u16]) -> String {
     let n = s.iter().position(|&c| c == 0).unwrap_or(s.len());
