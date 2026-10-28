@@ -562,7 +562,8 @@ fn storage(f: &mut Frame, app: &App, area: Rect) {
 /// The latest tasks of the host, newest first.
 fn tasks(f: &mut Frame, app: &App, area: Rect) {
     let now = unix_now();
-    let rows = app.model.host_tasks.iter().map(|t| {
+    let shown = app.model.tasks(now);
+    let rows = shown.iter().map(|t| {
         let (status, style) = match (t.end, t.failed()) {
             (None, _) => ("running".to_string(), YELLOW),
             (_, true) => (t.status.clone(), RED),
@@ -590,7 +591,17 @@ fn tasks(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(10),
         Constraint::Length(14),
     ];
-    let title = if app.model.host_tasks.is_empty() { " tasks (loading or none) " } else { " tasks (Enter: log) " };
+    let m = &app.model;
+    let mut title =
+        if m.host_tasks.is_empty() { " tasks (loading or none) ".to_string() } else { format!(" tasks ({}, Enter: log) ", shown.len()) };
+    if m.task_filter != crate::model::TaskFilter::All {
+        title = format!("{} show: {} ", title.trim_end(), m.task_filter.label());
+    }
+    if app.filtering && app.view == View::Tasks {
+        title = format!("{} find: {}_ ", title.trim_end(), m.task_find);
+    } else if !m.task_find.is_empty() {
+        title = format!("{} find: {} ", title.trim_end(), m.task_find);
+    }
     let t = Table::new(rows, widths).header(head).block(Block::new().borders(Borders::TOP).title(title)).row_highlight_style(SELECTED);
     let mut st = TableState::default().with_selected(Some(app.selected));
     f.render_stateful_widget(t, area, &mut st);
@@ -670,7 +681,7 @@ fn help(f: &mut Frame) {
         "  l          in a guest: switch processes / its log (j k scroll; / n N find in a log)",
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
-        "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
+        "  C  x  f    clean up old snapshots and backups / stop a task (Tasks) (asks first) / step the Tasks filter (failed, running, 24 h, 7 d)",
         "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, U package updates, V refresh them, K certificates;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
@@ -1122,7 +1133,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     let keys = match app.view {
         View::Host => " Tab guests  ? help  q quit",
         View::Storage => " Tab next  j/k move  Enter backups  ? help  q quit",
-        View::Tasks => " Tab host  j/k move  Enter log  x stop  ? help  q quit",
+        View::Tasks => " Tab host  j/k move  Enter log  x stop  f show  / find  ? help  q quit",
         View::Guests => {
             " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  t console  c config  e edit  z disk  n node  ? help  q quit"
         }
@@ -1849,6 +1860,49 @@ mod tests {
         a.dialog = Some(Dialog::Text { title: "replication".into(), lines: Some(lines), top: 0 });
         let s = text(&render(&a));
         assert!(s.contains("replication jobs (1)") && s.contains("pve1 -> pve2") && s.contains("FAILING x2"), "{s}");
+    }
+
+    #[test]
+    fn the_task_filter_cuts_the_list() {
+        use crate::model::TaskFilter;
+        let now = crate::model::unix_now();
+        let t = |kind: &str, id: &str, status: &str, age: u64, end: bool| yagura_core::proxmox::HostTask {
+            node: "pve".into(),
+            upid: "x".into(),
+            kind: kind.into(),
+            id: id.into(),
+            user: "root@pam".into(),
+            start: now - age,
+            end: end.then_some(now - age + 5),
+            status: status.into(),
+        };
+        let mut a = app(View::Tasks);
+        a.model.host_tasks = vec![
+            t("qmstart", "100", "OK", 60, true),
+            t("vzdump", "101", "job errors", 3600, true),
+            t("qmstop", "100", "", 90_000, false),
+            t("vzdump", "", "OK", 10 * 86400, true),
+        ];
+        let n = |a: &App| a.model.tasks(now).len();
+        assert_eq!(n(&a), 4);
+        a.model.task_filter = TaskFilter::Failed;
+        assert_eq!(a.model.tasks(now)[0].id, "101");
+        assert_eq!(n(&a), 1);
+        a.model.task_filter = TaskFilter::Running;
+        assert_eq!(a.model.tasks(now)[0].kind, "qmstop");
+        a.model.task_filter = TaskFilter::Day;
+        assert_eq!(n(&a), 2);
+        a.model.task_filter = TaskFilter::Week;
+        assert_eq!(n(&a), 3);
+        a.model.task_filter = TaskFilter::All;
+        a.model.task_find = "100".into();
+        assert_eq!(n(&a), 2);
+        a.model.task_find = "VZDUMP".into();
+        assert_eq!(n(&a), 2);
+        a.model.task_filter = TaskFilter::Failed;
+        let s = text(&render(&a));
+        assert!(s.contains("show: failed") && s.contains("find: VZDUMP"), "{s}");
+        assert_eq!(TaskFilter::Week.next(), TaskFilter::All);
     }
 
     #[test]

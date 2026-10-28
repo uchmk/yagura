@@ -146,7 +146,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  U (host) package updates, V refresh the lists  K (host) certificates and expiry  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  U (host) package updates, V refresh the lists  K (host) certificates and expiry  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -429,7 +429,7 @@ fn run(
             View::Graph(id) => app.model.guest_procs.get(&id).and_then(|p| p.as_ref()).map_or(0, Vec::len),
             View::Procs => app.model.procs.len(),
             View::Storage => app.model.cluster.storage.len(),
-            View::Tasks => app.model.host_tasks.len(),
+            View::Tasks => app.model.tasks(model::unix_now()).len(),
             View::Host => 0,
         };
         app.selected = app.selected.min(rows.saturating_sub(1));
@@ -475,13 +475,14 @@ fn run(
             _ if app.results.is_some() => app.results = None,
             _ if app.help => app.help = false,
             _ if app.filtering => {
+                let text = if app.view == View::Tasks { &mut app.model.task_find } else { &mut app.model.filter };
                 match k.code {
-                    KeyCode::Char(c) => app.model.filter.push(c),
+                    KeyCode::Char(c) => text.push(c),
                     KeyCode::Backspace => {
-                        app.model.filter.pop();
+                        text.pop();
                     }
                     KeyCode::Esc => {
-                        app.model.filter.clear();
+                        text.clear();
                         app.filtering = false;
                     }
                     KeyCode::Enter => app.filtering = false,
@@ -492,7 +493,11 @@ fn run(
             _ if app.log && matches!(app.view, View::Graph(_)) && guest_log_find(app, k.code) => {}
             _ if app.confirm.is_some() => answer(app, k.code, jobs_tx),
             KeyCode::Char('?') => app.help = true,
-            KeyCode::Char('/') if app.view == View::Guests => app.filtering = true,
+            KeyCode::Char('/') if matches!(app.view, View::Guests | View::Tasks) => app.filtering = true,
+            KeyCode::Char('f') if app.view == View::Tasks => {
+                app.model.task_filter = app.model.task_filter.next();
+                app.selected = 0;
+            }
             KeyCode::Char('o') if app.view == View::Guests => ask(app, Power::Start),
             KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
             KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
@@ -1060,7 +1065,7 @@ fn open_jobs(app: &mut App, tx: &Sender<Job>) {
 
 /// `x` in the task screen: ask before stopping the running task under the cursor.
 fn open_stop(app: &mut App) {
-    let Some(t) = app.model.host_tasks.get(app.selected) else { return };
+    let Some(t) = app.model.tasks(model::unix_now()).get(app.selected).copied() else { return };
     if t.end.is_some() {
         app.status = "that task has finished".into();
         return;
@@ -1168,7 +1173,7 @@ fn refresh_tasks(app: &mut App, tx: &Sender<Job>) {
 
 /// Open the log of the task under the cursor.
 fn open_task_log(app: &mut App, tx: &Sender<Job>) {
-    let Some(t) = app.model.host_tasks.get(app.selected).cloned() else { return };
+    let Some(t) = app.model.tasks(model::unix_now()).get(app.selected).map(|t| (*t).clone()) else { return };
     app.task_log = Some(TaskLog {
         upid: t.upid.clone(),
         title: format!("{} {} on {}", t.kind, t.id, t.node),

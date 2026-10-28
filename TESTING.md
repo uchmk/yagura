@@ -359,6 +359,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.63 | `r` in the backup-jobs dialog (`J`) asks y/n, then starts the job's guests, storage and mode once as a vzdump task that shows in the Tasks screen, even when the job is off. |
 | 3p.64 | `U` in the host screen lists the waiting package updates; `V` asks y/n, then refreshes the package lists as a task (nothing is installed). |
 | 3p.65 | `K` in the host screen lists the node's certificates with the days left; under 30 days reads EXPIRES SOON in red, past reads EXPIRED. |
+| 3p.66 | In the Tasks screen, `f` steps the list through all, failed, running, last 24 h and last 7 d, and `/` cuts it by a guest ID, type, user, node or status; Enter and x act on the row left on screen. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

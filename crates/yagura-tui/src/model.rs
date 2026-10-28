@@ -85,8 +85,44 @@ pub struct Rate {
 /// Seconds of GPU history kept.
 const GPU_KEEP: usize = 300;
 
+/// Which tasks the Tasks screen shows (`f` steps it).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum TaskFilter {
+    #[default]
+    All,
+    Failed,
+    Running,
+    Day,
+    Week,
+}
+
+impl TaskFilter {
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Failed,
+            Self::Failed => Self::Running,
+            Self::Running => Self::Day,
+            Self::Day => Self::Week,
+            Self::Week => Self::All,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Failed => "failed",
+            Self::Running => "running",
+            Self::Day => "last 24 h",
+            Self::Week => "last 7 d",
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Model {
+    /// The Tasks screen's filter by state or age, and its text (a guest ID, a type, a user, a node or a status; case-blind).
+    pub task_filter: TaskFilter,
+    pub task_find: String,
     /// The latest tasks of every node, newest first; `tasks_at` is when they were asked for.
     pub host_tasks: Vec<yagura_core::proxmox::HostTask>,
     pub tasks_at: Option<std::time::Instant>,
@@ -212,6 +248,22 @@ impl Model {
         let mut v: Vec<_> = self.cluster.storage.iter().collect();
         v.sort_by(|a, b| b.pct().unwrap_or(-1.0).total_cmp(&a.pct().unwrap_or(-1.0)).then_with(|| a.name.cmp(&b.name)));
         v
+    }
+
+    /// The tasks the Tasks screen shows: `host_tasks` cut by `task_filter` and `task_find`, newest first.
+    pub fn tasks(&self, now: u64) -> Vec<&yagura_core::proxmox::HostTask> {
+        let find = self.task_find.to_lowercase();
+        self.host_tasks
+            .iter()
+            .filter(|t| match self.task_filter {
+                TaskFilter::All => true,
+                TaskFilter::Failed => t.failed(),
+                TaskFilter::Running => t.end.is_none(),
+                TaskFilter::Day => t.start >= now.saturating_sub(86400),
+                TaskFilter::Week => t.start >= now.saturating_sub(7 * 86400),
+            })
+            .filter(|t| find.is_empty() || [&t.id, &t.kind, &t.user, &t.node, &t.status].iter().any(|s| s.to_lowercase().contains(&find)))
+            .collect()
     }
 
     /// Backup jobs that failed in the last day, newest first. A job over several guests names no guest, so the guests' own task
