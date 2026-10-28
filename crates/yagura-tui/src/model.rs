@@ -14,6 +14,10 @@ pub enum View {
     Host,
     Guests,
     Procs,
+    /// The storages: how full, what type, what they hold.
+    Storage,
+    /// The latest tasks of the host (backups, starts, upgrades), with their logs.
+    Tasks,
     /// One guest's graphs.
     Graph(u32),
 }
@@ -83,6 +87,10 @@ const GPU_KEEP: usize = 300;
 
 #[derive(Default)]
 pub struct Model {
+    /// The latest tasks of every node, newest first; `tasks_at` is when they were asked for.
+    pub host_tasks: Vec<yagura_core::proxmox::HostTask>,
+    pub tasks_at: Option<std::time::Instant>,
+    pub tasks_busy: bool,
     pub host: String,
     pub cpu: f32,
     pub load: Option<(f64, f64, f64)>,
@@ -199,6 +207,24 @@ impl Model {
         self.hist.get(&g.id)?.0.failure_since(now.saturating_sub(FAILED_WINDOW))
     }
 
+    /// The storages, fullest first (the ones that are not mounted last).
+    pub fn storages_sorted(&self) -> Vec<&yagura_core::proxmox::Storage> {
+        let mut v: Vec<_> = self.cluster.storage.iter().collect();
+        v.sort_by(|a, b| b.pct().unwrap_or(-1.0).total_cmp(&a.pct().unwrap_or(-1.0)).then_with(|| a.name.cmp(&b.name)));
+        v
+    }
+
+    /// Backup jobs that failed in the last day, newest first. A job over several guests names no guest, so the guests' own task
+    /// lists miss it; a failure of one known guest is left to that guest's mark.
+    pub fn backup_failures(&self, now: u64) -> Vec<&yagura_core::proxmox::HostTask> {
+        let since = now.saturating_sub(FAILED_WINDOW);
+        self.host_tasks
+            .iter()
+            .filter(|t| t.kind == "vzdump" && t.failed() && t.end.unwrap_or(t.start) >= since)
+            .filter(|t| t.id.is_empty() || !self.cluster.guests.iter().any(|g| g.id.to_string() == t.id))
+            .collect()
+    }
+
     /// What needs a look now, as `(key, text)`; a key stays the same while the cause does, so a new key is a new alert.
     pub fn alerts(&self, now: u64) -> Vec<(String, String)> {
         let cfg = crate::config::get();
@@ -213,6 +239,10 @@ impl Model {
         }
         if let Some(t) = self.cluster.temp_c.filter(|t| *t >= cfg.temp_hot) {
             out.push(("temp".into(), format!("host at {t:.0}C")));
+        }
+        for t in self.backup_failures(now) {
+            let what = if t.id.is_empty() { "backup job".to_string() } else { format!("backup of {}", t.id) };
+            out.push((format!("vzdump {}", t.upid), format!("{what} failed ({})", t.status)));
         }
         for g in self.cluster.guests.iter().filter(|g| !g.template) {
             if let Some(t) = self.failed_at(g, now) {

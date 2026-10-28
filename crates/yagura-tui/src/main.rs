@@ -64,6 +64,18 @@ pub struct App {
     pub batch: Option<(usize, Vec<Answer>)>,
     /// The answers of the last finished batch, shown until a key is pressed.
     pub results: Option<Vec<Answer>>,
+    /// The log of the task under the cursor in the task screen, over everything else.
+    pub task_log: Option<TaskLog>,
+}
+
+/// One task's log: `lines` is `None` while it is read (or when it could not be).
+pub struct TaskLog {
+    pub upid: String,
+    pub title: String,
+    pub lines: Option<Vec<String>>,
+    pub loading: bool,
+    /// How many lines up from the newest the view is.
+    pub back: usize,
 }
 
 /// What the user asked of a guest, shown until they answer.
@@ -90,6 +102,8 @@ enum Job {
     /// A guest's task log and snapshots.
     History(u32, History),
     GuestLogs(u32, Option<Vec<String>>),
+    HostTasks(Vec<proxmox::HostTask>),
+    TaskLog(String, Option<Vec<String>>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -99,7 +113,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  l logs  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  l logs  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -130,6 +144,7 @@ fn main() -> std::io::Result<()> {
         alerts_seen: HashSet::new(),
         batch: None,
         results: None,
+        task_log: None,
     };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
@@ -185,6 +200,16 @@ fn run(
                     app.procs_busy = false;
                     app.model.guest_logs.insert(id, l);
                 }
+                Job::HostTasks(t) => {
+                    app.model.tasks_busy = false;
+                    app.model.host_tasks = t;
+                }
+                Job::TaskLog(upid, l) => {
+                    if let Some(t) = app.task_log.as_mut().filter(|t| t.upid == upid) {
+                        t.loading = false;
+                        t.lines = l;
+                    }
+                }
                 Job::Latest(key, tag) => {
                     app.model.latest.insert(key, tag);
                 }
@@ -230,6 +255,7 @@ fn run(
         watch_alerts(app);
         prefetch(app, jobs_tx);
         prefetch_hist(app, jobs_tx);
+        refresh_tasks(app, jobs_tx);
         refresh_rrd(app, jobs_tx);
         refresh_procs(app, jobs_tx);
         let rows = match app.view {
@@ -237,6 +263,8 @@ fn run(
             View::Graph(id) if app.log => app.model.guest_logs.get(&id).and_then(|l| l.as_ref()).map_or(0, Vec::len),
             View::Graph(id) => app.model.guest_procs.get(&id).and_then(|p| p.as_ref()).map_or(0, Vec::len),
             View::Procs => app.model.procs.len(),
+            View::Storage => app.model.cluster.storage.len(),
+            View::Tasks => app.model.host_tasks.len(),
             View::Host => 0,
         };
         app.selected = app.selected.min(rows.saturating_sub(1));
@@ -251,6 +279,21 @@ fn run(
             continue;
         }
         match k.code {
+            _ if app.task_log.is_some() => {
+                let n = app.task_log.as_ref().and_then(|t| t.lines.as_ref()).map_or(0, Vec::len);
+                if let Some(t) = app.task_log.as_mut() {
+                    match k.code {
+                        KeyCode::Char('j') | KeyCode::Down => t.back = t.back.saturating_sub(1),
+                        KeyCode::Char('k') | KeyCode::Up => t.back = (t.back + 1).min(n),
+                        KeyCode::Char('g') | KeyCode::Home => t.back = n,
+                        KeyCode::Char('G') | KeyCode::End => t.back = 0,
+                        KeyCode::PageUp => t.back = (t.back + 10).min(n),
+                        KeyCode::PageDown => t.back = t.back.saturating_sub(10),
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => app.task_log = None,
+                        _ => {}
+                    }
+                }
+            }
             _ if app.results.is_some() => app.results = None,
             _ if app.help => app.help = false,
             _ if app.filtering => {
@@ -313,6 +356,8 @@ fn run(
                 app.view = match app.view {
                     View::Host => View::Guests,
                     View::Guests => View::Procs,
+                    View::Procs => View::Storage,
+                    View::Storage => View::Tasks,
                     _ => View::Host,
                 };
                 app.selected = 0;
@@ -326,9 +371,42 @@ fn run(
             KeyCode::Char('G') | KeyCode::End => app.selected = rows.saturating_sub(1),
             KeyCode::Char('s') if !matches!(app.view, View::Graph(_)) => app.sort = app.sort.next(),
             KeyCode::Enter if app.view == View::Guests => open_graphs(app),
+            KeyCode::Enter if app.view == View::Tasks => open_task_log(app, jobs_tx),
             _ => {}
         }
     }
+}
+
+/// Ask for the latest tasks of every node once a minute (and at once on start).
+fn refresh_tasks(app: &mut App, tx: &Sender<Job>) {
+    let m = &mut app.model;
+    if m.tasks_busy || m.tasks_at.is_some_and(|at| at.elapsed() < Duration::from_secs(60)) || m.cluster.nodes.is_empty() {
+        return;
+    }
+    m.tasks_busy = true;
+    m.tasks_at = Some(Instant::now());
+    let nodes: Vec<String> = m.cluster.nodes.iter().map(|n| n.name.clone()).collect();
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-tasks".into())
+        .spawn(move || {
+            let _ = tx.send(Job::HostTasks(proxmox::host_tasks(&nodes)));
+        })
+        .expect("spawn the tasks thread");
+}
+
+/// Open the log of the task under the cursor.
+fn open_task_log(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = app.model.host_tasks.get(app.selected).cloned() else { return };
+    app.task_log =
+        Some(TaskLog { upid: t.upid.clone(), title: format!("{} {} on {}", t.kind, t.id, t.node), lines: None, loading: true, back: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-tasklog".into())
+        .spawn(move || {
+            let _ = tx.send(Job::TaskLog(t.upid.clone(), proxmox::task_log(&t.node, &t.upid)));
+        })
+        .expect("spawn the task log thread");
 }
 
 /// Ask for a power change of the selected guest, or of every marked one in the guest list; nothing runs until `y`.

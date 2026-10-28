@@ -45,6 +45,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         View::Procs => procs(f, app, body),
         View::Host => host_graphs(f, app, body),
         View::Graph(id) => guest_procs(f, app, id, body),
+        View::Storage => storage(f, app, body),
+        View::Tasks => tasks(f, app, body),
     }
     if table {
         inside(f, app, detail);
@@ -56,6 +58,117 @@ pub fn draw(f: &mut Frame, app: &App) {
     if let Some(r) = &app.results {
         results(f, r);
     }
+    if let Some(t) = &app.task_log {
+        task_log(f, t);
+    }
+}
+
+/// The storages, fullest first.
+fn storage(f: &mut Frame, app: &App, area: Rect) {
+    let limit = crate::config::get().storage_full;
+    let rows = app.model.storages_sorted().into_iter().map(|s| {
+        let pct = s.pct();
+        let style = match pct {
+            None => DIM,
+            Some(p) if p >= limit => RED.add_modifier(Modifier::BOLD),
+            _ => Style::new(),
+        };
+        let bar = if s.active {
+            pct.map_or(String::new(), |p| {
+                let n = (p / 10.0).round().clamp(0.0, 10.0) as usize;
+                format!("[{}{}]", "#".repeat(n), ".".repeat(10 - n))
+            })
+        } else {
+            "not available".into()
+        };
+        Row::new([
+            Cell::from(s.name.clone()),
+            Cell::from(s.node.clone()),
+            Cell::from(s.kind.clone()),
+            Cell::from(bytes(s.used)),
+            Cell::from(bytes(s.total)),
+            Cell::from(if s.total > 0 { bytes(s.total.saturating_sub(s.used)) } else { "-".into() }),
+            Cell::from(pct.map_or("  -".into(), |p| format!("{p:3.0}%"))),
+            Cell::from(bar),
+            Cell::from(s.content.clone()),
+        ])
+        .style(style)
+    });
+    let head =
+        Row::new(["NAME", "NODE", "TYPE", "USED", "TOTAL", "FREE", "USE", "", "CONTENT"]).style(Style::new().add_modifier(Modifier::BOLD));
+    let widths = [
+        Constraint::Length(16),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(9),
+        Constraint::Length(9),
+        Constraint::Length(9),
+        Constraint::Length(5),
+        Constraint::Length(14),
+        Constraint::Min(10),
+    ];
+    let t = Table::new(rows, widths)
+        .header(head)
+        .block(Block::new().borders(Borders::TOP).title(" storage (fullest first) "))
+        .row_highlight_style(SELECTED);
+    let mut st = TableState::default().with_selected(Some(app.selected));
+    f.render_stateful_widget(t, area, &mut st);
+}
+
+/// The latest tasks of the host, newest first.
+fn tasks(f: &mut Frame, app: &App, area: Rect) {
+    let now = unix_now();
+    let rows = app.model.host_tasks.iter().map(|t| {
+        let (status, style) = match (t.end, t.failed()) {
+            (None, _) => ("running".to_string(), YELLOW),
+            (_, true) => (t.status.clone(), RED),
+            (_, false) => (t.status.clone(), Style::new()),
+        };
+        let took = t.end.map_or("-".to_string(), |e| age(e.saturating_sub(t.start)));
+        Row::new([
+            Cell::from(format!("{} ago", age(now.saturating_sub(t.start)))),
+            Cell::from(t.kind.clone()),
+            Cell::from(if t.id.is_empty() { "-".into() } else { t.id.clone() }),
+            Cell::from(took),
+            Cell::from(status),
+            Cell::from(t.node.clone()),
+            Cell::from(t.user.clone()),
+        ])
+        .style(style)
+    });
+    let head = Row::new(["WHEN", "TYPE", "ID", "TOOK", "STATUS", "NODE", "USER"]).style(Style::new().add_modifier(Modifier::BOLD));
+    let widths = [
+        Constraint::Length(10),
+        Constraint::Length(14),
+        Constraint::Length(7),
+        Constraint::Length(8),
+        Constraint::Min(16),
+        Constraint::Length(10),
+        Constraint::Length(14),
+    ];
+    let title = if app.model.host_tasks.is_empty() { " tasks (loading or none) " } else { " tasks (Enter: log) " };
+    let t = Table::new(rows, widths).header(head).block(Block::new().borders(Borders::TOP).title(title)).row_highlight_style(SELECTED);
+    let mut st = TableState::default().with_selected(Some(app.selected));
+    f.render_stateful_widget(t, area, &mut st);
+}
+
+/// One task's log over everything else, the newest lines at the bottom.
+fn task_log(f: &mut Frame, t: &crate::TaskLog) {
+    let area = f.area();
+    let r = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
+    f.render_widget(ratatui::widgets::Clear, r);
+    let inner = r.height.saturating_sub(2) as usize;
+    let lines: Vec<Line> = match &t.lines {
+        None if t.loading => vec![Line::styled("reading the log...", DIM)],
+        None => vec![Line::styled("the log could not be read", RED)],
+        Some(l) => {
+            let end = l.len().saturating_sub(t.back);
+            let from = end.saturating_sub(inner);
+            l[from..end].iter().map(|x| Line::raw(x.clone())).collect()
+        }
+    };
+    let title = format!(" {} - j/k scroll  g/G top/bottom  Esc close ", t.title);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title)), r);
 }
 
 /// What a power change of several guests did, one line each, over everything else.
@@ -82,7 +195,7 @@ fn results(f: &mut Frame, r: &[crate::Answer]) {
 fn help(f: &mut Frame) {
     const LINES: [&str; 27] = [
         "KEYS",
-        "  Tab        switch view: host / guests / this machine's processes",
+        "  Tab        host / guests / procs / storage / tasks (Enter: task log)",
         "  j k        move down / up      g G  top / bottom",
         "  /          find a guest by name or id (Enter keep, Esc clear)",
         "  s          sort: id, cpu, mem, swap, problems (worst first)",
@@ -157,6 +270,10 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
     let nodes = m.cluster.nodes.iter().map(|n| format!("{} {}", n.name, if n.online { "online" } else { "offline" })).collect::<Vec<_>>();
     let mut l3 = vec![Span::styled(format!(" pve: {}", if nodes.is_empty() { note(m.cluster.note) } else { nodes.join(", ") }), DIM)];
     l3.extend(host_state(&m.cluster));
+    if let Some(t) = m.backup_failures(unix_now()).first() {
+        let ago = age(unix_now().saturating_sub(t.end.unwrap_or(t.start)));
+        l3.push(Span::styled(format!("  backup FAILED {ago} ago"), RED.add_modifier(Modifier::BOLD)));
+    }
     if !app.alerts.is_empty() {
         l3.push(Span::styled(format!("  alerts {}", app.alerts.len()), RED.add_modifier(Modifier::BOLD)));
     }
@@ -537,10 +654,12 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     }
     let keys = match app.view {
         View::Host => " Tab guests  ? help  q quit",
+        View::Storage => " Tab next  j/k move  ? help  q quit",
+        View::Tasks => " Tab host  j/k move  Enter log  ? help  q quit",
         View::Guests => {
             " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  ? help  q quit"
         }
-        View::Procs => " Tab host  j/k move  ? help  q quit",
+        View::Procs => " Tab storage  j/k move  ? help  q quit",
         View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  ? help  q quit",
     };
     let mut text = keys.to_string();
@@ -778,6 +897,7 @@ mod tests {
             alerts_seen: Default::default(),
             batch: None,
             results: None,
+            task_log: None,
         }
     }
 
@@ -1055,12 +1175,66 @@ mod tests {
     fn the_host_header_shows_storage_and_a_wanted_reboot() {
         use yagura_core::proxmox::Storage;
         let mut a = app(View::Guests);
-        a.model.cluster.storage = vec![Storage { name: "local".into(), node: "pve".into(), used: 95, total: 100, active: true }];
+        a.model.cluster.storage = vec![Storage {
+            name: "local".into(),
+            node: "pve".into(),
+            used: 95,
+            total: 100,
+            active: true,
+            kind: "dir".into(),
+            content: String::new(),
+        }];
         a.model.cluster.reboot_required = true;
         let b = render(&a);
         let s = text(&b);
         assert!(s.contains("storage local 95%") && s.contains("reboot needed"), "{s}");
         assert!(b.content().iter().any(|c| c.symbol() == "9" && c.fg == Color::Red));
+    }
+
+    #[test]
+    fn the_storage_and_task_screens_and_a_failed_backup() {
+        use yagura_core::proxmox::{HostTask, Storage};
+        let now = crate::model::unix_now();
+        let mut a = app(View::Storage);
+        let st = |n: &str, used| Storage {
+            name: n.into(),
+            node: "pve".into(),
+            used,
+            total: 100,
+            active: true,
+            kind: "zfspool".into(),
+            content: "images,backup".into(),
+        };
+        a.model.cluster.storage = vec![st("small", 10), st("full", 95)];
+        let s = text(&render(&a));
+        assert!(s.contains("zfspool") && s.contains("images,backup") && s.rfind("full  ").unwrap() < s.rfind("small ").unwrap(), "{s}");
+        let t = |status: &str, id: &str| HostTask {
+            node: "pve".into(),
+            upid: format!("UPID:{status}{id}"),
+            kind: "vzdump".into(),
+            id: id.into(),
+            user: "root@pam".into(),
+            start: now - 700,
+            end: Some(now - 100),
+            status: status.into(),
+        };
+        a.model.host_tasks = vec![t("job errors", ""), t("OK", "101")];
+        a.view = View::Tasks;
+        let s = text(&render(&a));
+        assert!(s.contains("job errors") && s.contains("vzdump") && s.contains("10m"), "{s}");
+        a.view = View::Host;
+        let s = text(&render(&a));
+        assert!(s.contains("backup FAILED"), "{s}");
+        assert_eq!(a.model.alerts(now).iter().filter(|x| x.0.starts_with("vzdump")).count(), 1);
+        a.view = View::Tasks;
+        a.task_log = Some(crate::TaskLog {
+            upid: "x".into(),
+            title: "vzdump on pve".into(),
+            lines: Some(vec!["INFO: done".into()]),
+            loading: false,
+            back: 0,
+        });
+        assert!(text(&render(&a)).contains("INFO: done"));
     }
 
     #[test]

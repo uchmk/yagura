@@ -318,6 +318,9 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.21 | the host line shows `zfs <pool> <health>` (red unless ONLINE) and the hottest zone in degrees (red from `temp_hot`). |
 | 3p.22 | a new alert (storage, pool, temperature, failed task, stale) rings the bell once and shows `ALERT: …` and `alerts N` in the header; `YAGURA_BELL=0` keeps it silent. |
 | 3p.23 | `~/.config/yagura/tui.toml` (`stale_days`, `disk_full`, `storage_full`, `temp_hot`, `bell`) changes the limits; an environment variable wins over the file. |
+| 3p.24 | Tab goes host, guests, procs, storage, tasks; the storage screen lists the storages fullest first with type, free space and a bar (red from `storage_full`, gray when not available). |
+| 3p.25 | the tasks screen lists the latest tasks of every node newest first with duration and result; Enter opens the log of the selected one (j/k, g/G scroll, Esc closes). |
+| 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 
 ## 4. Resizing the columns

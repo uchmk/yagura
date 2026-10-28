@@ -149,6 +149,10 @@ pub struct Storage {
     pub used: u64,
     pub total: u64,
     pub active: bool,
+    /// The storage type (`dir`, `zfspool`, `lvmthin`, `nfs`…).
+    pub kind: String,
+    /// What it may hold (`images,rootdir,backup`…).
+    pub content: String,
 }
 
 impl Storage {
@@ -173,6 +177,8 @@ pub fn parse_storage(json: &str) -> Vec<Storage> {
                     used: u(r, "disk"),
                     total: u(r, "maxdisk"),
                     active: r.get("status").and_then(Value::as_str) == Some("available"),
+                    kind: s(r, "plugintype"),
+                    content: s(r, "content"),
                 })
                 .collect()
         })
@@ -593,6 +599,66 @@ pub fn parse_tasks(json: &str) -> Vec<Task> {
     t
 }
 
+/// One task of a node's task log, with the fields the task screen shows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HostTask {
+    pub node: String,
+    pub upid: String,
+    /// `vzdump`, `qmstart`, `aptupdate`…
+    pub kind: String,
+    /// The guest ID the task is about; empty for a job over several guests or for the host.
+    pub id: String,
+    pub user: String,
+    pub start: u64,
+    /// `None` while it runs.
+    pub end: Option<u64>,
+    /// `OK`, or what went wrong; empty while it runs.
+    pub status: String,
+}
+
+impl HostTask {
+    pub fn failed(&self) -> bool {
+        self.end.is_some() && !self.status.is_empty() && self.status != "OK" && !self.status.starts_with("WARNINGS")
+    }
+}
+
+/// A node's task list into host tasks, newest first.
+pub fn parse_host_tasks(json: &str, node: &str) -> Vec<HostTask> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let s = |t: &Value, k: &str| t[k].as_str().unwrap_or("").to_string();
+    let mut out: Vec<HostTask> = v
+        .as_array()
+        .map(|l| {
+            l.iter()
+                .filter_map(|t| {
+                    Some(HostTask {
+                        node: node.to_string(),
+                        upid: t["upid"].as_str()?.to_string(),
+                        kind: t["type"].as_str()?.to_string(),
+                        id: s(t, "id"),
+                        user: s(t, "user"),
+                        start: t["starttime"].as_u64()?,
+                        end: t["endtime"].as_u64(),
+                        status: s(t, "status"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by_key(|t| std::cmp::Reverse(t.start));
+    out
+}
+
+/// The lines in a task log (`[{"n":1,"t":"text"}]`), the last `keep` of them.
+pub fn parse_task_log(json: &str, keep: usize) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let mut lines: Vec<String> =
+        v.as_array().map(|l| l.iter().filter_map(|x| x["t"].as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let skip = lines.len().saturating_sub(keep);
+    lines.drain(..skip);
+    lines
+}
+
 /// The snapshots' times in a snapshot list (the `current` entry has none).
 pub fn parse_snapshots(json: &str) -> Vec<u64> {
     let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
@@ -622,6 +688,23 @@ pub fn history(node: &str, kind: Kind, id: u32, storages: &[String]) -> History 
         .flat_map(|j| parse_backups(&j))
         .collect();
     History { tasks: tasks.unwrap_or_default(), snapshots: snapshots.unwrap_or_default(), backups }
+}
+
+/// The latest tasks of every node, newest first (read-only `pvesh`). Slow: call it from a thread of its own.
+pub fn host_tasks(nodes: &[String]) -> Vec<HostTask> {
+    let mut all: Vec<HostTask> = nodes
+        .iter()
+        .filter_map(|n| pvesh(&format!("/nodes/{n}/tasks"), &["--limit", "100"]).map(|j| parse_host_tasks(&j, n)))
+        .flatten()
+        .collect();
+    all.sort_by_key(|t| std::cmp::Reverse(t.start));
+    all.truncate(150);
+    all
+}
+
+/// The log of one task; `None` when it can not be read. Slow: call it from a thread of its own.
+pub fn task_log(node: &str, upid: &str) -> Option<Vec<String>> {
+    pvesh(&format!("/nodes/{node}/tasks/{upid}/log"), &["--limit", "5000"]).map(|j| parse_task_log(&j, 500))
 }
 
 /// The last lines of a running guest's journal (or syslog); `None` when it can not be asked. Slow: call it from a thread of its own.
@@ -702,6 +785,16 @@ pub fn inspect(kind: Kind, id: u32) -> Inside {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_tasks_and_logs() {
+        let j = r#"[{"upid":"UPID:a:1","type":"vzdump","id":"","user":"root@pam","starttime":100,"endtime":150,"status":"job errors"},
+                    {"upid":"UPID:a:2","type":"qmstart","id":"101","user":"root@pam","starttime":200}]"#;
+        let t = parse_host_tasks(j, "a");
+        assert_eq!((t[0].kind.as_str(), t[0].end, t[0].failed()), ("qmstart", None, false));
+        assert!(t[1].failed() && t[1].id.is_empty());
+        assert_eq!(parse_task_log(r#"[{"n":1,"t":"a"},{"n":2,"t":"b"},{"n":3,"t":"c"}]"#, 2), vec!["b", "c"]);
+    }
 
     #[test]
     fn zpool_health_and_temperature() {
