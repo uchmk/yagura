@@ -4,6 +4,7 @@
 //! channel, so the keys never wait.
 
 mod config;
+mod dialog;
 mod model;
 mod ui;
 
@@ -66,6 +67,8 @@ pub struct App {
     pub results: Option<Vec<Answer>>,
     /// The log of the task under the cursor in the task screen, over everything else.
     pub task_log: Option<TaskLog>,
+    /// A snapshot or backup being asked for (name, form, list, last y/n).
+    pub dialog: Option<dialog::Dialog>,
 }
 
 /// One task's log: `lines` is `None` while it is read (or when it could not be).
@@ -104,6 +107,10 @@ enum Job {
     GuestLogs(u32, Option<Vec<String>>),
     HostTasks(Vec<proxmox::HostTask>),
     TaskLog(String, Option<Vec<String>>),
+    BackupSize(u32, Option<u64>),
+    Snaps(u32, Vec<proxmox::ops::Snap>),
+    /// A snapshot or backup finished: guest, what it was, result.
+    Op(u32, String, Result<(), String>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -113,7 +120,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  l logs  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  l logs  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -145,6 +152,7 @@ fn main() -> std::io::Result<()> {
         batch: None,
         results: None,
         task_log: None,
+        dialog: None,
     };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
@@ -209,6 +217,30 @@ fn run(
                         t.loading = false;
                         t.lines = l;
                     }
+                }
+                Job::BackupSize(id, size) => {
+                    if let Some(dialog::Dialog::Dump(f)) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Dump(f) if f.t.id == id))
+                    {
+                        f.last = Some(size);
+                    }
+                }
+                Job::Snaps(id, l) => {
+                    if let Some(dialog::Dialog::Snaps { list, .. }) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Snaps { t, .. } if t.id == id))
+                    {
+                        *list = Some(l);
+                    }
+                }
+                Job::Op(id, label, r) => {
+                    app.model.tasks_at = None;
+                    if let Some(e) = app.model.hist.get_mut(&id) {
+                        e.1 = e.1.checked_sub(HIST_EVERY).unwrap_or(e.1);
+                    }
+                    app.status = match r {
+                        Ok(()) => format!("{label} done"),
+                        Err(e) => format!("{label} failed: {e}"),
+                    };
                 }
                 Job::Latest(key, tag) => {
                     app.model.latest.insert(key, tag);
@@ -294,6 +326,7 @@ fn run(
                     }
                 }
             }
+            _ if app.dialog.is_some() => dialog_key(app, k.code, jobs_tx),
             _ if app.results.is_some() => app.results = None,
             _ if app.help => app.help = false,
             _ if app.filtering => {
@@ -318,6 +351,9 @@ fn run(
             KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
             KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
             KeyCode::Char('u') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Upgrade),
+            KeyCode::Char('S') if matches!(app.view, View::Guests | View::Graph(_)) => open_snapshot(app),
+            KeyCode::Char('b') if matches!(app.view, View::Guests | View::Graph(_)) => open_dump(app, jobs_tx),
+            KeyCode::Char('m') if matches!(app.view, View::Guests | View::Graph(_)) => open_snaps(app, jobs_tx),
             KeyCode::Char(' ') if app.view == View::Guests => {
                 if let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id)
                     && !app.marks.remove(&id)
@@ -375,6 +411,93 @@ fn run(
             _ => {}
         }
     }
+}
+
+/// The guest the snapshot and backup keys act on: the one under the cursor, or the entered one.
+fn target(app: &App) -> Option<dialog::Target> {
+    let guests = app.model.guests(app.sort);
+    let g = match app.view {
+        View::Graph(id) => guests.iter().find(|g| g.id == id),
+        _ => guests.get(app.selected),
+    };
+    g.map(|g| dialog::Target::of(g))
+}
+
+/// The least room on the node's storages that hold guest disks (a snapshot lives next to its disk).
+fn snap_free(m: &Model, t: &dialog::Target) -> Option<(String, u64)> {
+    m.cluster
+        .storage
+        .iter()
+        .filter(|s| s.node == t.node && s.active && s.total > 0 && s.content.split(',').any(|c| c == "images" || c == "rootdir"))
+        .map(|s| (s.name.clone(), s.total.saturating_sub(s.used)))
+        .min_by_key(|x| x.1)
+}
+
+/// `S`: ask for a snapshot name.
+fn open_snapshot(app: &mut App) {
+    let Some(t) = target(app) else { return };
+    if t.template {
+        app.status = format!("{}: a template can not be snapshotted", t.id);
+        return;
+    }
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Name { t, text: dialog::default_name(model::unix_now()) });
+}
+
+/// `b`: the backup form; the size of the last backup is read in the background.
+fn open_dump(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = target(app) else { return };
+    let f = dialog::DumpForm::new(t.clone(), &app.model.cluster.storage);
+    if f.stores.is_empty() {
+        app.status = format!("{}: no active storage on {} holds backups", t.id, t.node);
+        return;
+    }
+    app.status.clear();
+    let names: Vec<String> = f.stores.iter().map(|s| s.0.clone()).collect();
+    app.dialog = Some(dialog::Dialog::Dump(f));
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-lastdump".into())
+        .spawn(move || {
+            let _ = tx.send(Job::BackupSize(t.id, proxmox::ops::last_backup_size(&t.node, t.id, &names)));
+        })
+        .expect("spawn the backup size thread");
+}
+
+/// `m`: the snapshots of the guest, read in the background.
+fn open_snaps(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = target(app) else { return };
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Snaps { t: t.clone(), list: None, sel: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-snaps".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Snaps(t.id, proxmox::ops::snapshots(&t.node, t.kind, t.id)));
+        })
+        .expect("spawn the snapshots thread");
+}
+
+/// A key in a snapshot or backup dialog; `y` at the end runs the operation on a thread of its own.
+fn dialog_key(app: &mut App, code: KeyCode, tx: &Sender<Job>) {
+    let Some(d) = app.dialog.take() else { return };
+    let (next, run) = dialog::key(d, code, |t| snap_free(&app.model, t));
+    app.dialog = next;
+    let dialog::Next::Run(t, op) = run else { return };
+    let label = op.label(&t);
+    app.status = format!("{label}: running (a backup shows in the Tasks screen)");
+    app.model.tasks_at = None;
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-op".into())
+        .spawn(move || {
+            let r = match &op {
+                dialog::Op::Snap(s) => proxmox::ops::snapshot(t.kind, t.id, s),
+                dialog::Op::Dump(d) => proxmox::ops::vzdump(t.id, d),
+            };
+            let _ = tx.send(Job::Op(t.id, label, r));
+        })
+        .expect("spawn the operation thread");
 }
 
 /// Ask for the latest tasks of every node once a minute (and at once on start).

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod apps;
+pub mod ops;
 pub mod rrd;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -671,7 +672,7 @@ pub fn parse_backups(json: &str) -> Vec<u64> {
     v.as_array().map(|l| l.iter().filter_map(|b| b["ctime"].as_u64()).collect()).unwrap_or_default()
 }
 
-fn pvesh(path: &str, extra: &[&str]) -> Option<String> {
+pub(crate) fn pvesh(path: &str, extra: &[&str]) -> Option<String> {
     let o = Command::new("pvesh").args(["get", path]).args(extra).args(["--output-format", "json"]).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }

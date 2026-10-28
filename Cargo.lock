@@ -5802,7 +5802,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "yagura"
-version = "0.73.56"
+version = "0.73.57"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -5844,7 +5844,7 @@ dependencies = [
 
 [[package]]
 name = "yagura-core"
-version = "0.73.56"
+version = "0.73.57"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -5864,7 +5864,7 @@ dependencies = [
 
 [[package]]
 name = "yagura-tui"
-version = "0.73.56"
+version = "0.73.57"
 dependencies = [
  "crossbeam-channel",
  "ratatui",

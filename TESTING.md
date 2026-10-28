@@ -320,6 +320,9 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.23 | `~/.config/yagura/tui.toml` (`stale_days`, `disk_full`, `storage_full`, `temp_hot`, `bell`) changes the limits; an environment variable wins over the file. |
 | 3p.24 | Tab goes host, guests, procs, storage, tasks; the storage screen lists the storages fullest first with type, free space and a bar (red from `storage_full`, gray when not available). |
 | 3p.25 | the tasks screen lists the latest tasks of every node newest first with duration and result; Enter opens the log of the selected one (j/k, g/G scroll, Esc closes). |
+| 3p.27 | `S` asks a snapshot name (default `yagura-YYYYMMDD-HHMM`), a VM also asks about the memory, then a y/n that shows the free space of the storage; `y` creates it and the status line says done. |
+| 3p.28 | `b` opens the backup form (storage, mode, compression, expected size, free space), Enter shows the y/n with a red `NOT ENOUGH` when the target is short; `y` starts `vzdump` and the task shows in the tasks screen. |
+| 3p.29 | `m` lists the guest's snapshots; `d` deletes and `r` rolls back, each behind its own y/n (the rollback warns in red); any other key cancels without touching the guest. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

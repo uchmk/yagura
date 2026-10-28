@@ -14,6 +14,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table, T
 use yagura_core::proxmox::{Guest, Kind, Note, Status, apps};
 
 use crate::App;
+use crate::dialog::Dialog;
 use crate::model::{Model, View, age, bytes, disk_full, disk_pct, stale_limit, unix_now};
 use yagura_core::proxmox::rrd::Point;
 
@@ -61,6 +62,96 @@ pub fn draw(f: &mut Frame, app: &App) {
     if let Some(t) = &app.task_log {
         task_log(f, t);
     }
+    if let Some(d) = &app.dialog {
+        dialog(f, d);
+    }
+}
+
+/// A snapshot or backup question over everything else.
+fn dialog(f: &mut Frame, d: &Dialog) {
+    let (title, lines): (String, Vec<Line>) = match d {
+        Dialog::Name { t, text } => {
+            let ok = yagura_core::proxmox::ops::valid_snapname(text);
+            (
+                format!(" snapshot of {} {} ", t.id, t.name),
+                vec![
+                    Line::raw("name of the snapshot (letters, digits, - and _; starts with a letter):"),
+                    Line::styled(format!("  {text}_"), if ok { Style::new().add_modifier(Modifier::BOLD) } else { RED }),
+                    Line::raw(""),
+                    Line::styled("Enter next  Esc cancel", DIM),
+                ],
+            )
+        }
+        Dialog::Ram { t, name } => (
+            format!(" snapshot {name} of {} {} ", t.id, t.name),
+            vec![
+                Line::raw(format!("include the memory (RAM state, about {})?", bytes(t.maxmem))),
+                Line::raw("yes: rolling back resumes the running programs; no: the guest boots again"),
+                Line::raw(""),
+                Line::styled("y with memory  n without  Esc cancel", DIM),
+            ],
+        ),
+        Dialog::Dump(form) => {
+            let (est, guess) = form.estimate();
+            let mut l = vec![Line::styled("storage (j/k):", DIM)];
+            for (i, (name, free)) in form.stores.iter().enumerate() {
+                let mark = if i == form.store { "> " } else { "  " };
+                let st = if i == form.store { Style::new().add_modifier(Modifier::BOLD) } else { Style::new() };
+                l.push(Line::styled(format!("{mark}{name:<20} {} free", bytes(*free)), st));
+            }
+            l.push(Line::raw(format!(
+                "mode (m): {}  - {}",
+                yagura_core::proxmox::ops::Mode::ALL[form.mode].name(),
+                yagura_core::proxmox::ops::Mode::ALL[form.mode].note()
+            )));
+            l.push(Line::raw(format!("compress (c): {}", yagura_core::proxmox::ops::Compress::ALL[form.comp].name())));
+            l.push(Line::raw(match form.last {
+                None => "last backup: reading...".to_string(),
+                Some(_) => format!(
+                    "size: about {} ({})",
+                    bytes(est),
+                    if guess { "guess from its disks, no earlier backup" } else { "as its last backup" }
+                ),
+            }));
+            l.push(Line::raw(""));
+            l.push(Line::styled("Enter next  Esc cancel", DIM));
+            (format!(" backup {} {} ", form.t.id, form.t.name), l)
+        }
+        Dialog::Snaps { t, list, sel } => {
+            let mut l = vec![];
+            match list {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(s) if s.is_empty() => l.push(Line::styled("no snapshots", DIM)),
+                Some(s) => {
+                    for (i, x) in s.iter().enumerate() {
+                        let ago = age(unix_now().saturating_sub(x.time));
+                        let ram = if x.vmstate { " +RAM" } else { "" };
+                        let st = if i == *sel { SELECTED } else { Style::new() };
+                        l.push(Line::styled(format!("  {:<28} {ago:>6} ago{ram} {}", x.name, x.description), st));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("j/k move  d delete  r roll back (asks first)  Esc close", DIM));
+            (format!(" snapshots of {} {} ", t.id, t.name), l)
+        }
+        Dialog::Sure(s) => {
+            let mut l: Vec<Line> = s
+                .lines
+                .iter()
+                .map(|(t, warn)| if *warn { Line::styled(t.clone(), RED.add_modifier(Modifier::BOLD)) } else { Line::raw(t.clone()) })
+                .collect();
+            l.push(Line::raw(""));
+            l.push(Line::styled("y run it  any other key cancels", YELLOW.add_modifier(Modifier::BOLD)));
+            (" sure? ".to_string(), l)
+        }
+    };
+    let area = f.area();
+    let w = 100.min(area.width);
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    f.render_widget(ratatui::widgets::Clear, rect);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title)), rect);
 }
 
 /// The storages, fullest first.
@@ -205,6 +296,7 @@ fn help(f: &mut Frame) {
         "  l          in a guest: switch processes / its log (j k scroll)",
         "  u          install the waiting updates in the guest (asks first)",
         "  o d r      start / shut down / reboot the guest (asks first)",
+        "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  q          quit",
         "",
         "MARKS",
@@ -217,8 +309,7 @@ fn help(f: &mut Frame) {
         "  alerts N   header: new storage / pool / temperature / failed / stale (bell)",
         "",
         "The screen only reads. Nothing changes until you press y.",
-        "PROBLEMS sort puts first: swap full, disk full, failed task (2 each),",
-        "  reboot wanted, updates waiting, stale (1 each).",
+        "PROBLEMS first: swap/disk full, failed task (2 each); reboot, updates, stale (1)",
         "",
         "Press any key to close.",
     ];
@@ -657,10 +748,10 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         View::Storage => " Tab next  j/k move  ? help  q quit",
         View::Tasks => " Tab host  j/k move  Enter log  ? help  q quit",
         View::Guests => {
-            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  ? help  q quit"
+            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  ? help  q quit"
         }
         View::Procs => " Tab storage  j/k move  ? help  q quit",
-        View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  ? help  q quit",
+        View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  S snap  b backup  m snaps  ? help  q quit",
     };
     let mut text = keys.to_string();
     if let Some((id, p, since)) = app.busy.first() {
@@ -898,6 +989,7 @@ mod tests {
             batch: None,
             results: None,
             task_log: None,
+            dialog: None,
         }
     }
 
@@ -1249,6 +1341,22 @@ mod tests {
         assert!(s.contains("line 49") && !s.contains("line 99"), "{s}");
         a.model.guest_logs.insert(101, None);
         assert!(text(&render(&a)).contains("no log"));
+    }
+
+    #[test]
+    fn the_snapshot_and_backup_dialogs_draw() {
+        use crate::dialog::{Dialog, Op, Sure, Target};
+        use yagura_core::proxmox::{Kind, ops::SnapOp};
+        let t =
+            Target { id: 101, name: "web".into(), kind: Kind::Lxc, node: "pve".into(), maxmem: 1 << 30, used: 1 << 30, template: false };
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Name { t: t.clone(), text: "yagura-test".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("yagura-test") && s.contains("101"), "{s}");
+        let lines = vec![("free 10 GiB".to_string(), false), ("NOT ENOUGH".to_string(), true)];
+        a.dialog = Some(Dialog::Sure(Sure { t, op: Op::Snap(SnapOp::Delete("old".into())), lines }));
+        let s = text(&render(&a));
+        assert!(s.contains("sure?") && s.contains("NOT ENOUGH"), "{s}");
     }
 
     #[test]
