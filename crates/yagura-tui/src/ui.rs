@@ -403,7 +403,7 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 }
             }
             l.push(Line::raw(""));
-            l.push(Line::styled("j/k move  Enter on/off  n new  c change  d delete (each asks first)  Esc close", DIM));
+            l.push(Line::styled("j/k move  Enter on/off  n new  c change  d delete  r run now (each asks first)  Esc close", DIM));
             (" backup jobs ".to_string(), l)
         }
         Dialog::JobEdit { id, step, vals, err } => {

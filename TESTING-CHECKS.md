@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-294 rows to press (294 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+295 rows to press (295 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -310,6 +310,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.60** On the Storage screen, `n` in the backup-jobs dialog (`J`) walks through storage, schedule, guests (all or ids) and mode, a wrong field is told and refused, and the last Enter asks y/n before `pvesh create /cluster/backup`; `c` does the same for the job under the cursor (`pvesh set`), `d` asks y/n with a red line before `pvesh delete`.
 - [ ] **3p.61** `P` on the Host screen lists this node's services with their state; Enter asks y/n (a red line for pveproxy, pvedaemon, pve-cluster, corosync, sshd, networking) before `pvesh create .../services/<name>/restart`. `X` shows the node's time zone, DNS and hosts file, read only.
 - [ ] **3p.62** In the services dialog (`P`), `s`, `x` and `l` ask y/n before start, stop and reload of the service under the cursor; stopping pveproxy, pvedaemon, pve-cluster, corosync, sshd or networking adds a red line.
+- [ ] **3p.63** `r` in the backup-jobs dialog (`J`) asks y/n, then starts the job's guests, storage and mode once as a vzdump task that shows in the Tasks screen, even when the job is off.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

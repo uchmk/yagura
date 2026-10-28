@@ -405,6 +405,23 @@ pub fn backup_job_cmd(id: &str, on: bool) -> Cmd {
     Cmd::new("pvesh", &["set", &format!("/cluster/backup/{id}"), "--enabled", if on { "1" } else { "0" }])
 }
 
+/// Runs a backup job once, now: `pvesh create /nodes/<node>/vzdump` with the job's storage, mode and guests. It answers with a
+/// task, so it shows in the Tasks screen. A job without a node runs on `fallback`.
+pub fn backup_job_run_cmd(j: &BackupJob, fallback: &str) -> Cmd {
+    let node = if j.node.is_empty() { fallback } else { &j.node };
+    let node = if !node.is_empty() && node.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) { node } else { "invalid" };
+    let path = format!("/nodes/{node}/vzdump");
+    let mut a = vec!["create", path.as_str(), "--storage", j.storage.as_str(), "--mode", j.mode.as_str()];
+    match j.scope.as_str() {
+        "all" => a.extend(["--all", "1"]),
+        s => match s.strip_prefix("pool ") {
+            Some(p) => a.extend(["--pool", p]),
+            None => a.extend(["--vmid", s]),
+        },
+    }
+    Cmd::new("pvesh", &a)
+}
+
 /// `pvesh delete /cluster/backup/<id>`.
 pub fn backup_job_delete_cmd(id: &str) -> Cmd {
     Cmd::new("pvesh", &["delete", &format!("/cluster/backup/{id}")])
@@ -687,7 +704,7 @@ pub fn parse_services(json: &str) -> Vec<Service> {
 }
 
 /// This node's name, from the kernel.
-fn this_node() -> String {
+pub fn this_node() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim().to_string()
 }
 
@@ -1132,6 +1149,28 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_backup_job_runs_once_as_a_vzdump_task() {
+        let job = |scope: &str, node: &str| BackupJob {
+            id: "backup-1".into(),
+            enabled: false,
+            schedule: "daily".into(),
+            storage: "nas".into(),
+            scope: scope.into(),
+            mode: "snapshot".into(),
+            node: node.into(),
+            next_run: None,
+        };
+        let base = ["create", "/nodes/pve2/vzdump", "--storage", "nas", "--mode", "snapshot"];
+        assert_eq!(backup_job_run_cmd(&job("all", "pve2"), "pve1").args, [&base[..], &["--all", "1"]].concat());
+        assert_eq!(backup_job_run_cmd(&job("100,101", "pve2"), "pve1").args, [&base[..], &["--vmid", "100,101"]].concat());
+        assert_eq!(backup_job_run_cmd(&job("pool web", "pve2"), "pve1").args[6..], ["--pool", "web"]);
+        // Without a node it runs on this one; with no name at all it fails loudly.
+        assert_eq!(backup_job_run_cmd(&job("all", ""), "pve1").args[1], "/nodes/pve1/vzdump");
+        assert_eq!(backup_job_run_cmd(&job("all", ""), "").args[1], "/nodes/invalid/vzdump");
+        assert_eq!(backup_job_run_cmd(&job("all", "a/b"), "pve1").args[1], "/nodes/invalid/vzdump");
+    }
 
     #[test]
     fn backup_jobs_are_built_for_create_edit_and_delete() {

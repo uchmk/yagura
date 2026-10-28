@@ -509,6 +509,15 @@ pub fn sure_job(j: &ops::BackupJob) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label: format!("job {}", j.id), cmds: vec![ops::backup_job_cmd(&j.id, on)] }, lines }
 }
 
+/// The last question for running a backup job once, now.
+pub fn sure_job_run(j: &ops::BackupJob, fallback: &str) -> Sure {
+    let lines = vec![
+        (format!("run the backup job {} now ({} to {}, {})", j.id, j.scope, j.storage, j.mode), false),
+        ("it starts a backup task at once, whatever the schedule and whether the job is on; watch it in the Tasks screen".into(), false),
+    ];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("run job {}", j.id), cmds: vec![ops::backup_job_run_cmd(j, fallback)] }, lines }
+}
+
 /// The last question for deleting a backup job.
 pub fn sure_job_delete(j: &ops::BackupJob) -> Sure {
     let lines = vec![
@@ -855,6 +864,11 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 KeyCode::Char('d') => {
                     if let Some(j) = list.as_ref().and_then(|l| l.get(sel)) {
                         return (Some(Dialog::Sure(sure_job_delete(j))), Next::Nothing);
+                    }
+                }
+                KeyCode::Char('r') => {
+                    if let Some(j) = list.as_ref().and_then(|l| l.get(sel)) {
+                        return (Some(Dialog::Sure(sure_job_run(j, &ops::this_node()))), Next::Nothing);
                     }
                 }
                 KeyCode::Enter | KeyCode::Char('e') => {
@@ -1339,6 +1353,10 @@ mod tests {
         let Some(Dialog::Sure(s)) = d else { panic!("no question") };
         assert_eq!(s.op, Op::Cmds { label: "delete job backup-1".into(), cmds: vec![ops::backup_job_delete_cmd("backup-1")] });
         assert!(s.lines.iter().any(|l| l.1));
+        // `r` asks before running the job once.
+        let (d, _) = key(jobs(), KeyCode::Char('r'), none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(matches!(&s.op, Op::Cmds { label, cmds } if label == "run job backup-1" && cmds[0].args[1].ends_with("/vzdump")));
         // Esc leaves the form.
         let (d, _) = key(Dialog::JobEdit { id: None, step: 0, vals: Default::default(), err: String::new() }, KeyCode::Esc, none);
         assert!(d.is_none());
