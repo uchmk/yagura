@@ -424,6 +424,37 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ));
             (format!(" grow a disk of {} {} ", t.id, t.name), l)
         }
+        Dialog::Templates { list, sel, filter, storage, on_storage } => {
+            let shown = crate::dialog::templates_shown(list.as_deref(), filter);
+            let mark = |on: bool| if on { "_" } else { "" };
+            let mut l = vec![
+                Line::styled(
+                    format!("  filter   {filter}{}", mark(!on_storage)),
+                    if *on_storage { Style::new() } else { Style::new().add_modifier(Modifier::BOLD) },
+                ),
+                Line::styled(
+                    format!("  storage  {storage}{}", mark(*on_storage)),
+                    if *on_storage { Style::new().add_modifier(Modifier::BOLD) } else { Style::new() },
+                ),
+                Line::raw(""),
+            ];
+            match list {
+                None => l.push(Line::styled("reading the list...", DIM)),
+                Some(_) if shown.is_empty() => l.push(Line::styled("no template matches", DIM)),
+                Some(_) => {
+                    let from = sel.saturating_sub(12);
+                    for (i, n) in shown.iter().enumerate().skip(from).take(14) {
+                        let st =
+                            if i == (*sel).min(shown.len() - 1) { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+                        l.push(Line::styled(format!(" {n}"), st));
+                    }
+                    l.push(Line::styled(format!("{} of {}", shown.len(), list.as_ref().map_or(0, Vec::len)), DIM));
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("type to filter  Up/Down pick  Tab filter / storage  Enter download  Esc close", DIM));
+            (" container templates ".to_string(), l)
+        }
         Dialog::Create(f) => {
             let ct = f.kind == yagura_core::proxmox::Kind::Lxc;
             let labels = ["name", "cores", "memory MiB", "disk GiB", "storage", "bridge", if ct { "template *" } else { "ISO (optional)" }];
@@ -2340,6 +2371,17 @@ mod tests {
             Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), keys: vec![], sel: 0, gib: "10".into() });
         let s = text(&render(&a));
         assert!(s.contains("scsi0") && s.contains("size=32G") && s.contains("10_"), "{s}");
+    }
+
+    #[test]
+    fn the_template_list_draws() {
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Templates { list: None, sel: 0, filter: String::new(), storage: "local".into(), on_storage: false });
+        assert!(text(&render(&a)).contains("reading the list"));
+        let list = Some(vec!["alpine-3.20.tar.xz".to_string(), "debian-12.tar.zst".to_string()]);
+        a.dialog = Some(Dialog::Templates { list, sel: 0, filter: "deb".into(), storage: "local".into(), on_storage: false });
+        let s = text(&render(&a));
+        assert!(s.contains("debian-12") && !s.contains("alpine") && s.contains("1 of 2"), "{s}");
     }
 
     #[test]

@@ -1516,6 +1516,32 @@ pub fn net_del_cmd(kind: Kind, id: u32, dev: &str) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), "--delete", dev])
 }
 
+/// The container templates `pveam` offers, from `pvesh get /nodes/<n>/aplinfo`: the template names, sorted.
+pub fn parse_aplinfo(json: &str) -> Vec<String> {
+    let v: Value = serde_json::from_str(json).unwrap_or(Value::Null);
+    let mut out: Vec<String> = v.as_array().into_iter().flatten().filter_map(|x| x["template"].as_str()).map(str::to_string).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The container templates this node can download (empty when the list cannot be read).
+pub fn available_templates() -> Vec<String> {
+    let node = this_node();
+    if node.is_empty() {
+        return vec![];
+    }
+    pvesh(&format!("/nodes/{node}/aplinfo"), &[]).map(|j| parse_aplinfo(&j)).unwrap_or_default()
+}
+
+/// `pveam download <storage> <template>`.
+pub fn template_download_cmd(storage: &str, template: &str) -> Option<Cmd> {
+    let ok = |s: &str, extra: &[char]| {
+        !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || extra.contains(&c))
+    };
+    (ok(storage, &[]) && ok(template, &['+', '~'])).then(|| Cmd::new("pveam", &["download", storage, template]))
+}
+
 /// A guest to create: what the form of `a` collects.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewGuest {
@@ -1997,6 +2023,23 @@ mod tests {
         let m = disk_move_cmd("pve", Kind::Lxc, 200, "mp0", "tank");
         assert_eq!(m.args[1], "/nodes/pve/lxc/200/move_volume");
         assert_eq!(disk_detach_cmd(Kind::Qemu, 100, "scsi1").args, ["set", "100", "--delete", "scsi1"]);
+    }
+
+    #[test]
+    fn templates_are_listed_and_downloaded() {
+        let j = r#"[{"template":"debian-12-standard_12.7-1_amd64.tar.zst","section":"system"},{"template":"alpine-3.20-default_20240908_amd64.tar.xz"},{"template":"debian-12-standard_12.7-1_amd64.tar.zst"},{"x":1}]"#;
+        assert_eq!(parse_aplinfo(j), ["alpine-3.20-default_20240908_amd64.tar.xz", "debian-12-standard_12.7-1_amd64.tar.zst"]);
+        assert!(parse_aplinfo("x").is_empty());
+        let c = template_download_cmd("local", "debian-12-standard_12.7-1_amd64.tar.zst").unwrap();
+        assert_eq!(
+            (c.prog.as_str(), c.args),
+            ("pveam", vec!["download".to_string(), "local".into(), "debian-12-standard_12.7-1_amd64.tar.zst".into()])
+        );
+        assert!(
+            template_download_cmd("", "a").is_none()
+                && template_download_cmd("local", "a b").is_none()
+                && template_download_cmd("lo:cal", "a").is_none()
+        );
     }
 
     #[test]

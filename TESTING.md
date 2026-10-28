@@ -378,6 +378,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.82 | `v` lists the drives of the guest (disks, CD-ROM, cloud-init, EFI, unused); `m` asks for a storage then y/n and moves the disk (source deleted), `d` detaches it as `unusedN` and on an `unusedN` line destroys it (red); a CD-ROM and an unused volume cannot be moved. |
 | 3p.83 | In the `v` drives screen of a VM, `i` on a CD-ROM row asks for an ISO volume id then y/n and inserts it, `e` ejects it, `a` adds an empty CD-ROM on the first free ide0-3; a container refuses all three. |
 | 3p.84 | `a` in the Guests screen opens a form (name, cores, memory, disk, storage, bridge, ISO or template); F2 switches VM / container, a wrong value shows in red and blocks Enter, Enter finds a free id and asks y/n, then the guest appears; a container without a template is refused. |
+| 3p.85 | `P` in the Guests screen lists the downloadable container templates (read in the background); typing filters, Tab edits the storage, Enter asks y/n and runs `pveam download`; the finished template works in the `a` form. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

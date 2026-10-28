@@ -231,6 +231,14 @@ pub enum Dialog {
         vals: [String; 2],
         err: String,
     },
+    /// The container templates to download (`P`): the list is read in the background, typing filters it, Tab switches to the storage.
+    Templates {
+        list: Option<Vec<String>>,
+        sel: usize,
+        filter: String,
+        storage: String,
+        on_storage: bool,
+    },
     /// The form of a new guest (`a`).
     Create(CreateForm),
     /// The drives of a guest: move one to another storage (`m`, typing the storage) or detach it (`d`).
@@ -603,6 +611,25 @@ pub fn sure_disk_move(t: &Target, key: &str, value: &str, to: &str) -> Option<Su
         t: Target::none(),
         op: Op::Cmds { label: format!("move {key} to {to}"), cmds: vec![ops::disk_move_cmd(&t.node, t.kind, t.id, key, to)] },
         lines,
+    })
+}
+
+/// The templates of `list` that contain `filter` (case does not matter).
+pub fn templates_shown<'a>(list: Option<&'a [String]>, filter: &str) -> Vec<&'a str> {
+    let f = filter.to_ascii_lowercase();
+    list.unwrap_or_default().iter().map(String::as_str).filter(|n| n.to_ascii_lowercase().contains(&f)).collect()
+}
+
+/// The last question for downloading the template `name` into `storage`.
+pub fn sure_template_download(storage: &str, name: &str) -> Option<Sure> {
+    let cmd = ops::template_download_cmd(storage, name)?;
+    Some(Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("download {name}"), cmds: vec![cmd] },
+        lines: vec![
+            (format!("download the template {name} into {storage}"), false),
+            ("it is a few hundred MB from the Proxmox mirror; the task shows in the Tasks screen".to_string(), false),
+        ],
     })
 }
 
@@ -1512,6 +1539,34 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => stay(t, disks, keys, sel, gib),
             }
         }
+        Dialog::Templates { list, mut sel, mut filter, mut storage, mut on_storage } => {
+            let shown = templates_shown(list.as_deref(), &filter);
+            sel = sel.min(shown.len().saturating_sub(1));
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Tab => on_storage = !on_storage,
+                KeyCode::Down => sel = (sel + 1).min(shown.len().saturating_sub(1)),
+                KeyCode::Up => sel = sel.saturating_sub(1),
+                KeyCode::Enter => {
+                    if let Some(s) = shown.get(sel).and_then(|n| sure_template_download(&storage, n)) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                KeyCode::Backspace => {
+                    if on_storage { &mut storage } else { &mut filter }.pop();
+                    sel = 0;
+                }
+                KeyCode::Char(c) if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') => {
+                    let s = if on_storage { &mut storage } else { &mut filter };
+                    if s.len() < 40 {
+                        s.push(c);
+                    }
+                    sel = 0;
+                }
+                _ => {}
+            }
+            (Some(Dialog::Templates { list, sel, filter, storage, on_storage }), Next::Nothing)
+        }
         Dialog::Create(mut f) => {
             match code {
                 KeyCode::Esc => return (None, Next::Nothing),
@@ -2281,6 +2336,34 @@ mod tests {
         let Some(Dialog::Sure(s)) = key(open(2), KeyCode::Char('d'), none).0 else { panic!("no destroy question") };
         assert!(s.lines[0].1 && s.lines[0].0.starts_with("destroy unused0"));
         assert!(sure_disk_detach(&target(Kind::Lxc), "rootfs", "a:r").is_none());
+    }
+
+    #[test]
+    fn a_template_is_filtered_and_downloaded() {
+        let none = |_: &Target| None;
+        let list = vec!["alpine-3.20.tar.xz".to_string(), "debian-12.tar.zst".to_string(), "debian-11.tar.zst".to_string()];
+        let mut d = Dialog::Templates { list: Some(list), sel: 0, filter: String::new(), storage: "local".into(), on_storage: false };
+        for c in "DEB".chars() {
+            d = key(d, KeyCode::Char(c.to_ascii_lowercase()), none).0.unwrap();
+        }
+        d = key(d, KeyCode::Down, none).0.unwrap();
+        let Some(Dialog::Sure(s)) = key(d, KeyCode::Enter, none).0 else { panic!("no question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds {
+                label: "download debian-11.tar.zst".into(),
+                cmds: vec![ops::template_download_cmd("local", "debian-11.tar.zst").unwrap()]
+            }
+        );
+        // Before the list arrives Enter does nothing; the storage is edited after Tab.
+        let (d, _) = key(
+            Dialog::Templates { list: None, sel: 0, filter: String::new(), storage: "local".into(), on_storage: false },
+            KeyCode::Enter,
+            none,
+        );
+        let (d, _) = key(d.unwrap(), KeyCode::Tab, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('x'), none);
+        assert!(matches!(d, Some(Dialog::Templates { on_storage: true, ref storage, .. }) if storage == "localx"));
     }
 
     #[test]
