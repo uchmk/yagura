@@ -341,6 +341,11 @@ pub fn config(node: &str, kind: Kind, id: u32) -> Option<Vec<(String, String)>> 
     pvesh(&format!("/nodes/{node}/{what}/{id}/config"), &[]).map(|j| parse_config(&j)).filter(|c| !c.is_empty())
 }
 
+/// The console of a running guest: `qm terminal` for a VM (leave with Ctrl+O), `pct enter` for a container (leave with `exit`).
+pub fn console_cmd(kind: Kind, id: u32) -> Cmd {
+    if kind == Kind::Lxc { Cmd::new("pct", &["enter", &id.to_string()]) } else { Cmd::new("qm", &["terminal", &id.to_string()]) }
+}
+
 /// `qm set` / `pct set` for the memory (MiB) and the number of cores.
 pub fn set_cmd(kind: Kind, id: u32, mem_mib: Option<u32>, cores: Option<u32>) -> Cmd {
     let mut c = Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string()]);
@@ -486,6 +491,8 @@ mod tests {
         assert_eq!(c[0].1, "2048");
         assert_eq!(set_cmd(Kind::Lxc, 101, Some(1024), Some(2)).args, ["set", "101", "--memory", "1024", "--cores", "2"]);
         assert_eq!(set_cmd(Kind::Qemu, 7, None, Some(4)), Cmd::new("qm", &["set", "7", "--cores", "4"]));
+        assert_eq!(console_cmd(Kind::Qemu, 7), Cmd::new("qm", &["terminal", "7"]));
+        assert_eq!(console_cmd(Kind::Lxc, 101), Cmd::new("pct", &["enter", "101"]));
         assert_eq!(maintenance_cmd("pve", true).args, ["crm-command", "node-maintenance", "enable", "pve"]);
         assert_eq!(stop_task_cmd("pve", "UPID:pve:1").args, ["delete", "/nodes/pve/tasks/UPID:pve:1"]);
         let snap = |name: &str, time| Snap { name: name.into(), time, vmstate: false, description: String::new() };

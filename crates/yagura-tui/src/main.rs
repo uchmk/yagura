@@ -71,6 +71,8 @@ pub struct App {
     pub dialog: Option<dialog::Dialog>,
     /// The cleanup scan is running.
     pub cleaning: bool,
+    /// A console to open next: the screen is handed to it until it ends.
+    pub console: Option<(String, proxmox::ops::Cmd)>,
 }
 
 /// One task's log: `lines` is `None` while it is read (or when it could not be).
@@ -130,7 +132,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  x stop task  Enter (storage) backups  l logs  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  t console  x stop task  Enter (storage) backups  l logs  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -164,6 +166,7 @@ fn main() -> std::io::Result<()> {
         task_log: None,
         dialog: None,
         cleaning: false,
+        console: None,
     };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
@@ -345,6 +348,9 @@ fn run(
             View::Host => 0,
         };
         app.selected = app.selected.min(rows.saturating_sub(1));
+        if let Some((hint, cmd)) = app.console.take() {
+            console(term, app, &hint, &cmd);
+        }
         term.draw(|f| ui::draw(f, app))?;
 
         if !event::poll(Duration::from_millis(250))? {
@@ -404,6 +410,7 @@ fn run(
                 open_config(app, jobs_tx)
             }
             KeyCode::Char('e') if app.view == View::Guests => open_edit(app),
+            KeyCode::Char('t') if matches!(app.view, View::Guests | View::Graph(_)) => open_console(app),
             KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
             KeyCode::Char(' ') if app.view == View::Guests => {
                 if let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id)
@@ -542,6 +549,54 @@ fn open_config(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Config(t.id, proxmox::ops::config(&t.node, t.kind, t.id).unwrap_or_default()));
         })
         .expect("spawn the config thread");
+}
+
+/// `t`: the console of the running guest under the cursor; the screen goes to it until it ends.
+fn open_console(app: &mut App) {
+    let guests = app.model.guests(app.sort);
+    let g = match app.view {
+        View::Graph(id) => guests.iter().find(|g| g.id == id),
+        _ => guests.get(app.selected),
+    };
+    let Some(g) = g else { return };
+    if g.status != proxmox::Status::Running {
+        app.status = format!("{}: the console needs a running guest", g.id);
+        return;
+    }
+    let hint = if g.kind == proxmox::Kind::Lxc { "leave with exit" } else { "leave with Ctrl+O" };
+    app.status.clear();
+    app.console = Some((format!("{} {} ({hint})", g.id, g.name), proxmox::ops::console_cmd(g.kind, g.id)));
+}
+
+/// Give the terminal to the console command, then take the screen back.
+fn console(term: &mut ratatui::DefaultTerminal, app: &mut App, title: &str, cmd: &proxmox::ops::Cmd) {
+    use std::io::Write;
+    let _ = term.show_cursor();
+    ratatui::restore();
+    println!(
+        "
+console {title}
+"
+    );
+    let why = match std::process::Command::new(&cmd.prog).args(&cmd.args).status() {
+        Ok(s) if s.success() => None,
+        Ok(s) => Some(s.to_string()),
+        Err(e) => Some(e.to_string()),
+    };
+    if let Some(why) = why {
+        println!(
+            "
+{} {} did not end cleanly ({why}). Press Enter.",
+            cmd.prog,
+            cmd.args.join(" ")
+        );
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stdin().read_line(&mut String::new());
+        app.status = format!("console {title}: ended with an error");
+    }
+    *term = ratatui::init();
+    let _ = term.hide_cursor();
+    let _ = term.clear();
 }
 
 /// `e`: the memory and cores form for the marked guests, or the one under the cursor.

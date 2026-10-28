@@ -367,7 +367,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e        guest config / set mem+cores;  Storage: Enter backups",
+        "  c e t      guest config / set mem+cores / console;  Storage: Enter backups",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -818,10 +818,10 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         View::Storage => " Tab next  j/k move  Enter backups  ? help  q quit",
         View::Tasks => " Tab host  j/k move  Enter log  x stop  ? help  q quit",
         View::Guests => {
-            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  c config  e edit  ? help  q quit"
+            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  c config  e edit  t console  ? help  q quit"
         }
         View::Procs => " Tab storage  j/k move  ? help  q quit",
-        View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  S snap  b backup  m snaps  c config  ? help  q quit",
+        View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  S snap  b backup  m snaps  c config  t console  ? help  q quit",
     };
     let mut text = keys.to_string();
     if let Some((id, p, since)) = app.busy.first() {
@@ -1061,6 +1061,7 @@ mod tests {
             task_log: None,
             dialog: None,
             cleaning: false,
+            console: None,
         }
     }
 
@@ -1479,6 +1480,15 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_footers_and_help_name_the_console_key() {
+        assert!(text(&render(&app(View::Guests))).contains("t console"));
+        assert!(text(&render(&app(View::Graph(101)))).contains("t console"));
+        let mut a = app(View::Guests);
+        a.help = true;
+        assert!(text(&render(&a)).contains("c e t"));
     }
 
     #[test]

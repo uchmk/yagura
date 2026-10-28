@@ -330,6 +330,8 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.34 | `r` on a backup asks y/n for a restore as a new guest with a free id (not an existing one); `y` starts it and the new guest appears stopped in the guest list. |
 | 3p.35 | `c` in the guest list (or the graph screen) opens the guest's configuration read only (same keys as `qm config`/`pct config`); j/k scroll, Esc closes; an unreadable one says so. |
 | 3p.36 | `e` opens the memory (MiB) and cores form for the marked guests (or the one under the cursor); digits and Tab work, blank keeps the value, Enter asks y/n listing the guests; `y` sets them and `c` shows the new values. |
+| 3p.37 | `t` on a running VM leaves the TUI and runs `qm terminal` (Ctrl+O leaves it); on a running container it runs `pct enter` (`exit` leaves it); afterwards the TUI is back with no leftover characters. |
+| 3p.38 | `t` on a stopped guest does not leave the TUI and the status line says the console needs a running guest; a console command that fails waits for Enter before returning. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 
