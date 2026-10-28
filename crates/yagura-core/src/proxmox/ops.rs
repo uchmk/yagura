@@ -977,6 +977,26 @@ pub fn apt_updates() -> Vec<String> {
     pvesh(&format!("/nodes/{node}/apt/update"), &[]).map(|j| parse_apt(&j)).unwrap_or_default()
 }
 
+/// How many packages wait for an upgrade, from `/nodes/<n>/apt/update` (`None` when the answer is not a list).
+pub fn parse_apt_count(json: &str) -> Option<usize> {
+    serde_json::from_str::<Value>(json).ok()?.as_array().map(|a| a.len())
+}
+
+/// The number of packages waiting on this node (read-only `pvesh`; the list from the last `apt update`).
+pub fn apt_count() -> Option<usize> {
+    let node = this_node();
+    if node.is_empty() {
+        return None;
+    }
+    pvesh(&format!("/nodes/{node}/apt/update"), &[]).and_then(|j| parse_apt_count(&j))
+}
+
+/// `apt-get dist-upgrade` on this machine without questions (the API has no upgrade call, so it is run directly; it keeps the
+/// configuration files that were changed by hand).
+pub fn apt_upgrade_cmd() -> Cmd {
+    Cmd::new("env", &["DEBIAN_FRONTEND=noninteractive", "apt-get", "dist-upgrade", "-y", "-o", "Dpkg::Options::=--force-confold"])
+}
+
 /// `pvesh create /nodes/<n>/apt/update`: refreshes the package lists (an `apt update`); it answers with a task.
 pub fn apt_refresh_cmd(node: &str) -> Cmd {
     let ok = !node.is_empty() && node.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
@@ -1759,6 +1779,16 @@ mod tests {
         ] {
             assert!(storage_add_cmd(k, &f(bad)).is_err(), "{k} {bad:?}");
         }
+    }
+
+    #[test]
+    fn the_upgrade_is_counted_and_noninteractive() {
+        assert_eq!(parse_apt_count(r#"[{"Package":"a"},{"Package":"b"}]"#), Some(2));
+        assert_eq!(parse_apt_count("[]"), Some(0));
+        assert_eq!(parse_apt_count("x"), None);
+        let c = apt_upgrade_cmd();
+        assert_eq!(c.prog, "env");
+        assert!(c.args.contains(&"dist-upgrade".to_string()) && c.args.contains(&"DEBIAN_FRONTEND=noninteractive".to_string()));
     }
 
     #[test]

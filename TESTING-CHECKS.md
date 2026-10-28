@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-310 rows to press (310 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+311 rows to press (311 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -326,6 +326,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.76** `n` in the Storage screen: Tab switches between nfs, dir, lvmthin and zfspool; unused fields are skipped; y/n is asked last.
 - [ ] **3p.77** `B` on a guest opens its boot options (start at boot, order, up/down delay), filled from the config; empty numbers delete `startup`; y/n is asked last.
 - [ ] **3p.78** `e` in the Storage view edits content and enabled of the storage under the cursor (empty keeps it); disabling shows a red warning, and y/n is asked last.
+- [ ] **3p.79** `I` in the host screen counts the waiting updates, then asks y/n (red: a restart may be needed) before `apt-get dist-upgrade -y` on this node.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

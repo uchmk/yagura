@@ -594,6 +594,17 @@ pub fn sure_apt_refresh(node: &str) -> Sure {
     }
 }
 
+/// The last question for upgrading every package of this node; `waiting` is how many the last `apt update` found.
+pub fn sure_apt_upgrade(node: &str, waiting: usize) -> Sure {
+    let mut lines = vec![(format!("upgrade {waiting} package(s) of {node} (apt-get dist-upgrade)"), waiting > 0)];
+    if waiting == 0 {
+        lines.push(("the list says nothing is waiting; V looks again first".into(), false));
+    }
+    lines.push(("a new kernel or pve package needs a restart of the node to take effect".into(), true));
+    lines.push(("it runs as this user on this node only and can take minutes; a cluster is upgraded one node at a time".into(), false));
+    Sure { t: Target::none(), op: Op::Cmds { label: "apt dist-upgrade".into(), cmds: vec![ops::apt_upgrade_cmd()] }, lines }
+}
+
 /// The last question for running a backup job once, now.
 pub fn sure_job_run(j: &ops::BackupJob, fallback: &str) -> Sure {
     let lines = vec![
@@ -1636,6 +1647,15 @@ mod tests {
         // Esc leaves the form.
         let (d, _) = key(Dialog::JobEdit { id: None, step: 0, vals: Default::default(), err: String::new() }, KeyCode::Esc, none);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_upgrade_question_names_the_count() {
+        let s = sure_apt_upgrade("pve", 7);
+        assert!(s.lines[0].0.contains("7 package") && s.lines[0].1, "{:?}", s.lines);
+        assert!(s.lines.iter().any(|(l, red)| *red && l.contains("restart")));
+        assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds[0].prog == "env"));
+        assert!(sure_apt_upgrade("pve", 0).lines.iter().any(|(l, _)| l.contains("nothing is waiting")));
     }
 
     #[test]

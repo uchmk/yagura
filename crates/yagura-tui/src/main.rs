@@ -111,6 +111,8 @@ enum Job {
     /// The lines for the open `Dialog::Text` with this title.
     Text(&'static str, Vec<String>),
     Jobs(Vec<proxmox::ops::BackupJob>),
+    /// How many packages wait for an upgrade (`None` when it could not be read).
+    Upgrade(Option<usize>),
     /// The node's time zone and resolver to start the edit form from (`None` when they could not be read).
     NodeValues(Option<[String; 5]>),
     Content(String, String, Vec<proxmox::ops::Vol>),
@@ -149,7 +151,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  M migrate  O add to HA  Q remove from HA  B boot options  e (storage) edit  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  N (host) network interfaces  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  M migrate  O add to HA  Q remove from HA  B boot options  e (storage) edit  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  N (host) network interfaces  I (host) upgrade packages  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -283,6 +285,14 @@ fn run(
                     }
                     Some(_) => {}
                     None => app.status = "could not read the node's time and DNS".into(),
+                },
+                Job::Upgrade(n) => match n {
+                    Some(n) if app.status == UPGRADE_READING => {
+                        app.status.clear();
+                        app.dialog = Some(dialog::Dialog::Sure(dialog::sure_apt_upgrade(&proxmox::ops::this_node(), n)));
+                    }
+                    Some(_) => {}
+                    None => app.status = "could not read the waiting updates".into(),
                 },
                 Job::Jobs(l) => {
                     if let Some(dialog::Dialog::Jobs { list, .. }) = app.dialog.as_mut() {
@@ -630,6 +640,7 @@ fn run(
             KeyCode::Char('N') if app.view == View::Host => open_network(app, jobs_tx),
             KeyCode::Char('W') if app.view == View::Host => open_node_edit(app, jobs_tx),
             KeyCode::Char('L') if app.view == View::Host => open_host_firewall(app, jobs_tx),
+            KeyCode::Char('I') if app.view == View::Host => open_upgrade(app, jobs_tx),
             KeyCode::Char('V') if app.view == View::Host => {
                 app.dialog = Some(dialog::Dialog::Sure(dialog::sure_apt_refresh(&proxmox::ops::this_node())));
             }
@@ -1082,6 +1093,20 @@ fn open_node_edit(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::NodeValues(proxmox::ops::node_values()));
         })
         .expect("spawn the node edit thread");
+}
+
+const UPGRADE_READING: &str = "counting the waiting updates...";
+
+/// `I` in the host screen: counts the waiting updates in the background, then asks before `apt-get dist-upgrade` on this node.
+fn open_upgrade(app: &mut App, tx: &Sender<Job>) {
+    app.status = UPGRADE_READING.into();
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-upgrade".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Upgrade(proxmox::ops::apt_count()));
+        })
+        .expect("spawn the upgrade thread");
 }
 
 /// `N` in the host screen: this node's bridges, bonds, VLANs and ports (read only).
