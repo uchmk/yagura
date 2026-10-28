@@ -1002,6 +1002,56 @@ pub fn node_disks() -> Vec<String> {
     parse_disks(&list, &|dev| pvesh(&format!("/nodes/{node}/disks/smart"), &["--disk", dev]).unwrap_or_default())
 }
 
+/// The lines of the network page from `/nodes/<n>/network`: each bridge, bond, VLAN and port with its address, gateway and members.
+/// An interface that is set to start but is not active is marked DOWN.
+pub fn parse_network(json: &str) -> Vec<String> {
+    let v: Value = serde_json::from_str(json).unwrap_or(Value::Null);
+    let Some(a) = v.as_array() else { return vec![] };
+    let s = |x: &Value, k: &str| x[k].as_str().unwrap_or("").trim().to_string();
+    let mut rows: Vec<&Value> = a.iter().filter(|x| s(x, "type") != "unknown" || x["iface"].is_string()).collect();
+    rows.sort_by_key(|x| s(x, "iface"));
+    let mut out = vec![format!("network interfaces ({})", rows.len())];
+    for x in rows {
+        let addr = match (s(x, "cidr"), s(x, "address")) {
+            (c, _) if !c.is_empty() => c,
+            (_, a) if !a.is_empty() => a,
+            _ => "no address".to_string(),
+        };
+        let down = x["autostart"].as_u64() == Some(1) && x["active"].as_u64() != Some(1);
+        let gw = s(x, "gateway");
+        out.push(format!(
+            "  {:<10} {:<10} {addr}{}{}",
+            s(x, "iface"),
+            s(x, "type"),
+            if gw.is_empty() { String::new() } else { format!("  gw {gw}") },
+            if down { "  DOWN" } else { "" }
+        ));
+        for (k, label) in [("bridge_ports", "ports"), ("slaves", "slaves"), ("bond_slaves", "slaves"), ("bond_mode", "mode")] {
+            let m = s(x, k);
+            if !m.is_empty() {
+                out.push(format!("             {label} {m}"));
+            }
+        }
+        if let Some(id) = x["vlan-id"].as_u64() {
+            out.push(format!("             vlan {id} on {}", s(x, "vlan-raw-device")));
+        }
+        let c = s(x, "comments");
+        if !c.is_empty() {
+            out.push(format!("             # {}", c.replace('\n', " ")));
+        }
+    }
+    out
+}
+
+/// This node's network interfaces (read-only `pvesh`).
+pub fn network() -> Vec<String> {
+    let node = this_node();
+    if node.is_empty() {
+        return vec![];
+    }
+    pvesh(&format!("/nodes/{node}/network"), &[]).map(|j| parse_network(&j)).unwrap_or_default()
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -1527,6 +1577,26 @@ mod tests {
         };
         assert!(bad(0, "") && bad(0, "../x") && bad(0, "/etc") && bad(1, "a b") && bad(2, "") && bad(2, "host") && bad(3, "x;y"));
         assert!(node_save_cmds("../x", &v).is_err());
+    }
+
+    #[test]
+    fn network_interfaces_show_addresses_members_and_down() {
+        let j = r#"[{"iface":"vmbr0","type":"bridge","cidr":"192.168.1.10/24","gateway":"192.168.1.1","bridge_ports":"eno1","autostart":1,"active":1},
+                    {"iface":"eno1","type":"eth","autostart":1,"active":0},
+                    {"iface":"bond0","type":"bond","slaves":"a b","bond_mode":"802.3ad","address":"10.0.0.2","active":1,"comments":"storage"},
+                    {"iface":"vlan5","type":"vlan","vlan-id":5,"vlan-raw-device":"vmbr0","active":1}]"#;
+        let l = parse_network(j);
+        assert_eq!(l[0], "network interfaces (4)");
+        assert!(l[1].contains("bond0") && l[1].contains("10.0.0.2"), "{l:?}");
+        assert!(l.contains(&"             slaves a b".to_string()));
+        assert!(l.contains(&"             mode 802.3ad".to_string()));
+        assert!(l.contains(&"             # storage".to_string()));
+        assert!(l.iter().any(|x| x.contains("eno1") && x.contains("no address") && x.ends_with("DOWN")), "{l:?}");
+        assert!(
+            l.iter().any(|x| x.contains("vmbr0") && x.contains("192.168.1.10/24") && x.contains("gw 192.168.1.1") && !x.contains("DOWN"))
+        );
+        assert!(l.contains(&"             vlan 5 on vmbr0".to_string()));
+        assert!(parse_network("x").is_empty());
     }
 
     #[test]

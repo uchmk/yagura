@@ -180,6 +180,7 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                             || s.contains("EXPIRES SOON")
                             || s.contains("FAILING")
                             || s.contains("UNHEALTHY")
+                            || s.ends_with("DOWN")
                         {
                             RED
                         } else {
@@ -727,7 +728,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x  f    clean up old snapshots and backups / stop a task (Tasks) (asks first) / step the Tasks filter (failed, running, 24 h, 7 d)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART, N network;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1975,6 +1976,15 @@ mod tests {
         a.dialog = Some(Dialog::NodeEdit { node: "pve".into(), step: 2, vals, err: "dns1 is an IP address like 192.168.1.1".into() });
         let s = text(&render(&a));
         assert!(s.contains("time and DNS of pve") && s.contains("Asia/Tokyo") && s.contains("dns1 is an IP"), "{s}");
+    }
+
+    #[test]
+    fn the_network_page_draws() {
+        let mut a = app(View::Host);
+        let lines = vec!["network interfaces (1)".to_string(), "  eno1       eth        no address  DOWN".to_string()];
+        a.dialog = Some(Dialog::Text { title: "network interfaces".into(), lines: Some(lines), top: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("network interfaces") && s.contains("eno1") && s.contains("DOWN"), "{s}");
     }
 
     #[test]
