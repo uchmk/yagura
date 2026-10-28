@@ -482,7 +482,7 @@ fn draw_toast(ui: &Ui, app: &App) {
     let Some((t, left)) = app.shown_toast() else { return };
     let c = ito_theme::colors();
     let font = FontId::proportional(12.5);
-    let area = ui.max_rect();
+    let area = ui.available_rect_before_wrap();
     let galley = ui.painter().layout_no_wrap(t.to_string(), font, c.strong());
     let size = galley.size() + vec2(28.0, 14.0);
     let r = Rect::from_center_size(pos2(area.center().x + 120.0, area.bottom() - 20.0 - size.y / 2.0), size);

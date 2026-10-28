@@ -278,7 +278,7 @@ fn now_secs() -> u64 {
 /// Draw the window and report what the pointer did.
 pub fn frame(ui: &Ui, app: &App) -> Out {
     let mut out = Out::default();
-    let full = ui.max_rect();
+    let full = ui.available_rect_before_wrap();
     let cw = ui.ctx().fonts_mut(|f| f.glyph_width(&font(), 'M'));
     let pen = Pen { p: ui.painter_at(full), cw };
     pen.p.rect_filled(full, 0.0, theme::bg());
