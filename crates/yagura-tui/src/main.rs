@@ -153,7 +153,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  v drives (move, detach, CD-ROM)  a new guest  P download template  W add hardware  Y clone  D delete  T template  N network  F firewall  M migrate  O add to HA  Q remove from HA  B boot options  e (storage) edit  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  N (host) network interfaces  I (host) upgrade packages  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  v drives (move, detach, CD-ROM)  a new guest  P download template  W add hardware  I cloud-init  Y clone  D delete  T template  N network  F firewall  M migrate  O add to HA  Q remove from HA  B boot options  e (storage) edit  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  N (host) network interfaces  I (host) upgrade packages  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -354,6 +354,13 @@ fn run(
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Boot { t, .. } if t.id == id))
                     {
                         *vals = proxmox::ops::boot_fields(&l);
+                        *loaded = true;
+                    }
+                    if let Some(dialog::Dialog::CloudInit { t, v, loaded, .. }) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::CloudInit { t, .. } if t.id == id))
+                    {
+                        let _ = t;
+                        *v = proxmox::ops::cloudinit_fields(&l);
                         *loaded = true;
                     }
                     if let Some(dialog::Dialog::Hardware { t, keys, .. }) =
@@ -569,6 +576,7 @@ fn run(
             KeyCode::Char('a') if app.view == View::Guests => open_create(app),
             KeyCode::Char('P') if app.view == View::Guests => open_templates(app, jobs_tx),
             KeyCode::Char('W') if matches!(app.view, View::Guests | View::Graph(_)) => open_hardware(app, jobs_tx),
+            KeyCode::Char('I') if matches!(app.view, View::Guests | View::Graph(_)) => open_cloudinit(app, jobs_tx),
             KeyCode::Char('n') if app.view == View::Guests => open_node(app),
             KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
             KeyCode::Char('M') if matches!(app.view, View::Guests | View::Graph(_)) => open_migrate(app),
@@ -857,6 +865,18 @@ fn open_resize(app: &mut App, tx: &Sender<Job>) {
     let Some(t) = target(app) else { return };
     app.status.clear();
     app.dialog = Some(dialog::Dialog::Resize { t: t.clone(), disks: None, keys: vec![], sel: 0, gib: String::new() });
+    read_config(t, tx);
+}
+
+/// `I`: the cloud-init settings of a VM; the config is read in the background.
+fn open_cloudinit(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = target(app) else { return };
+    if t.kind != proxmox::Kind::Qemu {
+        app.status = format!("{}: cloud-init is for VMs", t.id);
+        return;
+    }
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::CloudInit { t: t.clone(), v: Default::default(), field: 0, loaded: false });
     read_config(t, tx);
 }
 

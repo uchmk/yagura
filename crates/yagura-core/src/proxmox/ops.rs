@@ -1516,6 +1516,72 @@ pub fn net_del_cmd(kind: Kind, id: u32, dev: &str) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), "--delete", dev])
 }
 
+/// The labels of the cloud-init fields, in the order of `cloudinit_fields`.
+pub const CLOUDINIT_LABELS: [&str; 5] =
+    ["user", "IP (dhcp, or address/prefix [gateway])", "DNS servers", "search domain", "SSH keys file (on the node)"];
+
+/// The cloud-init fields of a VM's configuration: user, IP, DNS servers, search domain and the SSH keys file (always empty: the keys
+/// are stored encoded, so an empty field means "leave them").
+pub fn cloudinit_fields(cfg: &[(String, String)]) -> [String; 5] {
+    let get = |k: &str| cfg.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    let ip =
+        get("ipconfig0").split(',').filter_map(|p| p.strip_prefix("ip=").or_else(|| p.strip_prefix("gw="))).collect::<Vec<_>>().join(" ");
+    [get("ciuser"), ip, get("nameserver"), get("searchdomain"), String::new()]
+}
+
+/// `qm set` for the cloud-init fields that are not empty. A password is not offered: `qm` takes it only as an argument, which any
+/// user of the machine can read in `ps`.
+pub fn cloudinit_cmd(id: u32, f: &[String; 5]) -> Result<Cmd, String> {
+    let word = |s: &str, extra: &[char]| s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || extra.contains(&c));
+    let mut args = vec!["set".to_string(), id.to_string()];
+    let mut put = |k: &str, v: String| {
+        args.push(format!("--{k}"));
+        args.push(v);
+    };
+    let user = f[0].trim();
+    if !user.is_empty() {
+        if !word(user, &[]) || user.starts_with('-') {
+            return Err("the user may hold letters, digits, - _ . only".into());
+        }
+        put("ciuser", user.to_string());
+    }
+    let ip: Vec<&str> = f[1].split_whitespace().collect();
+    match ip.as_slice() {
+        [] => {}
+        ["dhcp"] => put("ipconfig0", "ip=dhcp".into()),
+        [addr] | [addr, _] if addr.contains('/') && word(addr, &[':', '/']) && ip.get(1).is_none_or(|g| word(g, &[':'])) => {
+            put("ipconfig0", format!("ip={addr}{}", ip.get(1).map(|g| format!(",gw={g}")).unwrap_or_default()))
+        }
+        _ => return Err("the IP is dhcp, or address/prefix and an optional gateway".into()),
+    }
+    let dns: Vec<&str> = f[2].split_whitespace().collect();
+    if !dns.is_empty() {
+        if !dns.iter().all(|d| word(d, &[':'])) {
+            return Err("the DNS servers are addresses separated by spaces".into());
+        }
+        put("nameserver", dns.join(" "));
+    }
+    let domain = f[3].trim();
+    if !domain.is_empty() {
+        if !word(domain, &[]) {
+            return Err("the search domain may hold letters, digits, - _ . only".into());
+        }
+        put("searchdomain", domain.to_string());
+    }
+    let keys = f[4].trim();
+    if !keys.is_empty() {
+        if !keys.starts_with('/') || !word(keys, &['/']) || keys.contains("..") {
+            return Err("the SSH keys file is an absolute path on the node".into());
+        }
+        put("sshkeys", keys.to_string());
+    }
+    if args.len() == 2 {
+        return Err("nothing to change".into());
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    Ok(Cmd::new("qm", &refs))
+}
+
 /// The hardware a VM can be given from the hardware dialog.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hw {
@@ -2088,6 +2154,49 @@ mod tests {
         let m = disk_move_cmd("pve", Kind::Lxc, 200, "mp0", "tank");
         assert_eq!(m.args[1], "/nodes/pve/lxc/200/move_volume");
         assert_eq!(disk_detach_cmd(Kind::Qemu, 100, "scsi1").args, ["set", "100", "--delete", "scsi1"]);
+    }
+
+    #[test]
+    fn cloud_init_is_read_and_set() {
+        let cfg: Vec<(String, String)> = [
+            ("ciuser", "ubuntu"),
+            ("ipconfig0", "ip=10.0.0.5/24,gw=10.0.0.1"),
+            ("nameserver", "1.1.1.1"),
+            ("sshkeys", "ssh-ed25519%20AAAA"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let f = cloudinit_fields(&cfg);
+        assert_eq!(f, ["ubuntu", "10.0.0.5/24 10.0.0.1", "1.1.1.1", "", ""]);
+        // Setting what was read changes the user, the IP with its gateway and the DNS; nothing more.
+        let c = cloudinit_cmd(101, &f).unwrap();
+        assert_eq!(c.args, ["set", "101", "--ciuser", "ubuntu", "--ipconfig0", "ip=10.0.0.5/24,gw=10.0.0.1", "--nameserver", "1.1.1.1"]);
+        let mut g = f.clone();
+        g[1] = "dhcp".into();
+        g[3] = "lan.example".into();
+        g[4] = "/root/.ssh/id_ed25519.pub".into();
+        let c = cloudinit_cmd(101, &g).unwrap();
+        assert!(
+            c.args.windows(2).any(|w| w == ["--ipconfig0", "ip=dhcp"])
+                && c.args.windows(2).any(|w| w == ["--sshkeys", "/root/.ssh/id_ed25519.pub"])
+        );
+        let bad = |i: usize, v: &str| {
+            let mut h = f.clone();
+            h[i] = v.into();
+            cloudinit_cmd(101, &h).is_err()
+        };
+        assert!(
+            bad(0, "a b")
+                && bad(0, "-x")
+                && bad(1, "10.0.0.5")
+                && bad(1, "a/24 b c")
+                && bad(2, "1.1.1.1;ls")
+                && bad(3, "a b")
+                && bad(4, "rel/key")
+                && bad(4, "/a/../b")
+        );
+        assert!(cloudinit_cmd(101, &Default::default()).is_err());
     }
 
     #[test]

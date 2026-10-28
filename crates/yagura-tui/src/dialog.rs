@@ -231,6 +231,13 @@ pub enum Dialog {
         vals: [String; 2],
         err: String,
     },
+    /// The cloud-init settings of a VM (`I`): user, IP, DNS, search domain, SSH keys file. Empty fields are left as they are.
+    CloudInit {
+        t: Target,
+        v: [String; 5],
+        field: usize,
+        loaded: bool,
+    },
     /// Hardware to add to a VM (`W`): USB, PCI passthrough, a serial port, the TPM state, an EFI disk. `keys` are the config's keys.
     Hardware {
         t: Target,
@@ -1558,6 +1565,36 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => stay(t, disks, keys, sel, gib),
             }
         }
+        Dialog::CloudInit { t, mut v, mut field, loaded } => {
+            let n = v.len();
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Tab | KeyCode::Down => field = (field + 1) % n,
+                KeyCode::BackTab | KeyCode::Up => field = (field + n - 1) % n,
+                KeyCode::Backspace => {
+                    v[field].pop();
+                }
+                KeyCode::Char(c) if c.is_ascii_graphic() || c == ' ' => {
+                    if v[field].len() < 120 {
+                        v[field].push(c);
+                    }
+                }
+                KeyCode::Enter if loaded => {
+                    if let Ok(cmd) = ops::cloudinit_cmd(t.id, &v) {
+                        let lines = ops::CLOUDINIT_LABELS
+                            .iter()
+                            .zip(&v)
+                            .filter(|(_, x)| !x.trim().is_empty())
+                            .map(|(l, x)| (format!("{l}: {}", x.trim()), false))
+                            .collect();
+                        let s = Sure { t: Target::none(), op: Op::Cmds { label: format!("cloud-init {}", t.id), cmds: vec![cmd] }, lines };
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::CloudInit { t, v, field, loaded }), Next::Nothing)
+        }
         Dialog::Hardware { t, keys, mut sel, mut text } => {
             let n = ops::Hw::ALL.len();
             match code {
@@ -2380,6 +2417,37 @@ mod tests {
         let Some(Dialog::Sure(s)) = key(open(2), KeyCode::Char('d'), none).0 else { panic!("no destroy question") };
         assert!(s.lines[0].1 && s.lines[0].0.starts_with("destroy unused0"));
         assert!(sure_disk_detach(&target(Kind::Lxc), "rootfs", "a:r").is_none());
+    }
+
+    #[test]
+    fn cloud_init_is_edited_and_set() {
+        let none = |_: &Target| None;
+        let open = |loaded| Dialog::CloudInit { t: target(Kind::Qemu), v: Default::default(), field: 0, loaded };
+        // Not before the config is read, not with nothing to change.
+        assert!(matches!(key(open(false), KeyCode::Enter, none).0, Some(Dialog::CloudInit { .. })));
+        assert!(matches!(key(open(true), KeyCode::Enter, none).0, Some(Dialog::CloudInit { .. })));
+        let mut d = Some(open(true));
+        for c in "debian".chars() {
+            d = key(d.unwrap(), KeyCode::Char(c), none).0;
+        }
+        d = key(d.unwrap(), KeyCode::Tab, none).0;
+        for c in "dhcp".chars() {
+            d = key(d.unwrap(), KeyCode::Char(c), none).0;
+        }
+        let Some(Dialog::Sure(s)) = key(d.clone().unwrap(), KeyCode::Enter, none).0 else { panic!("no question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds {
+                label: "cloud-init 101".into(),
+                cmds: vec![
+                    ops::cloudinit_cmd(101, &["debian".into(), "dhcp".into(), String::new(), String::new(), String::new()]).unwrap()
+                ]
+            }
+        );
+        assert_eq!(s.lines.len(), 2);
+        // A wrong value stays in the form.
+        let (d, _) = key(d.unwrap(), KeyCode::Char('x'), none);
+        assert!(matches!(key(d.unwrap(), KeyCode::Enter, none).0, Some(Dialog::CloudInit { field: 1, .. })));
     }
 
     #[test]

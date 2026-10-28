@@ -424,6 +424,24 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ));
             (format!(" grow a disk of {} {} ", t.id, t.name), l)
         }
+        Dialog::CloudInit { t, v, field, loaded } => {
+            let mut l =
+                vec![Line::styled(format!("{} {}: cloud-init", t.id, t.name), Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
+            for (i, (label, val)) in yagura_core::proxmox::ops::CLOUDINIT_LABELS.iter().zip(v.iter()).enumerate() {
+                let on = i == *field;
+                let st = if on { Style::new().add_modifier(Modifier::BOLD) } else { Style::new() };
+                l.push(Line::styled(format!(" {label}"), DIM));
+                l.push(Line::styled(format!("   {val}{}", if on { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            if !loaded {
+                l.push(Line::styled("reading the configuration...", DIM));
+            } else if let Err(e) = yagura_core::proxmox::ops::cloudinit_cmd(t.id, v) {
+                l.push(Line::styled(e, RED));
+            }
+            l.push(Line::styled("Tab/Up/Down field  Enter ask  Esc close  (no password: it would show in ps)", DIM));
+            (" cloud-init ".to_string(), l)
+        }
         Dialog::Hardware { t, keys, sel, text } => {
             let mut l =
                 vec![Line::styled(format!("{} {}: add hardware", t.id, t.name), Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
@@ -2387,6 +2405,18 @@ mod tests {
             Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), keys: vec![], sel: 0, gib: "10".into() });
         let s = text(&render(&a));
         assert!(s.contains("scsi0") && s.contains("size=32G") && s.contains("10_"), "{s}");
+    }
+
+    #[test]
+    fn the_cloud_init_form_draws() {
+        let mut a = app(View::Guests);
+        let mut v: [String; 5] = Default::default();
+        a.dialog = Some(Dialog::CloudInit { t: crate::dialog::Target::none(), v: v.clone(), field: 0, loaded: false });
+        assert!(text(&render(&a)).contains("reading the configuration"));
+        v[1] = "10.0.0.5".into();
+        a.dialog = Some(Dialog::CloudInit { t: crate::dialog::Target::none(), v, field: 1, loaded: true });
+        let s = text(&render(&a));
+        assert!(s.contains("search domain") && s.contains("10.0.0.5_") && s.contains("address/prefix and an optional gateway"), "{s}");
     }
 
     #[test]
