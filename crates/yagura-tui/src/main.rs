@@ -685,6 +685,7 @@ fn run(
             KeyCode::Char('U') if app.view == View::Host => open_apt(app, jobs_tx),
             KeyCode::Char('K') if app.view == View::Host => open_certs(app, jobs_tx),
             KeyCode::Char('S') if app.view == View::Host => open_ssh(app, jobs_tx),
+            KeyCode::Char('B') if app.view == View::Host => open_sdn(app, jobs_tx),
             KeyCode::Char('D') if app.view == View::Host => open_disks(app, jobs_tx),
             KeyCode::Char('N') if app.view == View::Host => open_network(app, jobs_tx),
             KeyCode::Char('W') if app.view == View::Host => open_node_edit(app, jobs_tx),
@@ -1282,6 +1283,20 @@ fn open_coverage(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Text(TITLE, proxmox::ops::backup_status(&guests, &storages)));
         })
         .expect("spawn the backup coverage thread");
+}
+
+/// `B` in the host screen: the SDN zones, VNets and subnets (read only).
+fn open_sdn(app: &mut App, tx: &Sender<Job>) {
+    const TITLE: &str = "SDN";
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Text { title: TITLE.into(), lines: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-sdn".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Text(TITLE, proxmox::ops::sdn_status()));
+        })
+        .expect("spawn the SDN thread");
 }
 
 /// `S` in the host screen: whether this node can log in to the other nodes over ssh with a key (read only).

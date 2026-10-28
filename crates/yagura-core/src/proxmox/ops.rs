@@ -1177,6 +1177,67 @@ pub fn backup_status(guests: &[(u32, String)], storages: &[(String, String, Stri
     out
 }
 
+/// The SDN page: each zone with its VNets and their subnets. `vnet_subnets` holds the `subnets` JSON of each VNet by name.
+pub fn sdn_report(zones: &str, vnets: &str, vnet_subnets: &[(String, String)]) -> Vec<String> {
+    let list = |j: &str| serde_json::from_str::<Value>(j).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let s = |v: &Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+    let (zones, vnets) = (list(zones), list(vnets));
+    if zones.is_empty() && vnets.is_empty() {
+        return vec!["SDN".into(), "  no zones: the software-defined network is not set up on this cluster".into()];
+    }
+    let mut out = vec![format!("SDN: {} zones, {} VNets", zones.len(), vnets.len())];
+    for z in &zones {
+        let name = s(z, "zone");
+        let nodes = s(z, "nodes");
+        out.push(String::new());
+        out.push(format!(
+            "zone {name}  type {}{}",
+            s(z, "type"),
+            if nodes.is_empty() { String::new() } else { format!("  nodes {nodes}") }
+        ));
+        for v in vnets.iter().filter(|v| s(v, "zone") == name) {
+            let vn = s(v, "vnet");
+            let tag = v["tag"].as_u64().map(|t| format!("  vlan {t}")).unwrap_or_default();
+            let alias = s(v, "alias");
+            out.push(format!("  vnet {vn}{tag}{}", if alias.is_empty() { String::new() } else { format!("  ({alias})") }));
+            let subs = vnet_subnets.iter().find(|(n, _)| *n == vn).map(|(_, j)| list(j)).unwrap_or_default();
+            for sub in subs {
+                let gw = s(&sub, "gateway");
+                let snat = if sub["snat"].as_u64() == Some(1) { "  snat" } else { "" };
+                out.push(format!(
+                    "    subnet {}{}{snat}",
+                    s(&sub, "cidr"),
+                    if gw.is_empty() { String::new() } else { format!("  gateway {gw}") }
+                ));
+            }
+        }
+    }
+    let orphans: Vec<String> = vnets.iter().filter(|v| !zones.iter().any(|z| s(z, "zone") == s(v, "zone"))).map(|v| s(v, "vnet")).collect();
+    if !orphans.is_empty() {
+        out.push(String::new());
+        out.push(format!("VNets in no listed zone: {}", orphans.join(", ")));
+    }
+    out
+}
+
+/// The SDN page for this cluster (read-only `pvesh`; the answer is empty text when SDN is not set up).
+pub fn sdn_status() -> Vec<String> {
+    let zones = pvesh("/cluster/sdn/zones", &[]).unwrap_or_default();
+    let vnets = pvesh("/cluster/sdn/vnets", &[]).unwrap_or_default();
+    let names: Vec<String> = serde_json::from_str::<Value>(&vnets)
+        .ok()
+        .and_then(|v| v.as_array().map(|a| a.iter().filter_map(|v| v["vnet"].as_str().map(str::to_string)).collect()))
+        .unwrap_or_default();
+    let subs: Vec<(String, String)> = names
+        .into_iter()
+        .map(|n| {
+            let j = pvesh(&format!("/cluster/sdn/vnets/{n}/subnets"), &[]).unwrap_or_default();
+            (n, j)
+        })
+        .collect();
+    sdn_report(&zones, &vnets, &subs)
+}
+
 /// The lines of the ssh page: one per other node, `ok` or why the key login failed.
 pub fn ssh_report(results: &[(String, Result<(), String>)]) -> Vec<String> {
     if results.is_empty() {
@@ -2443,6 +2504,20 @@ mod tests {
         assert!(r[3].contains("102") && r[3].contains("30 days ago") && r[3].contains('!'), "{r:?}");
         assert!(r[4].contains("101") && r[4].contains("2 days ago") && !r[4].contains('!'), "{r:?}");
         assert!(r[5].contains("100") && r[5].contains("today"), "{r:?}");
+    }
+
+    #[test]
+    fn the_sdn_page_nests_vnets_and_subnets_in_zones() {
+        let zones = r#"[{"zone":"lan","type":"vlan","nodes":"pve1,pve2"},{"zone":"ov","type":"vxlan"}]"#;
+        let vnets = r#"[{"vnet":"web","zone":"lan","tag":20,"alias":"front"},{"vnet":"lost","zone":"gone"}]"#;
+        let subs = vec![("web".to_string(), r#"[{"cidr":"10.0.20.0/24","gateway":"10.0.20.1","snat":1}]"#.to_string())];
+        let r = sdn_report(zones, vnets, &subs);
+        assert_eq!(r[0], "SDN: 2 zones, 2 VNets");
+        assert!(r.contains(&"zone lan  type vlan  nodes pve1,pve2".to_string()), "{r:?}");
+        assert!(r.contains(&"  vnet web  vlan 20  (front)".to_string()), "{r:?}");
+        assert!(r.contains(&"    subnet 10.0.20.0/24  gateway 10.0.20.1  snat".to_string()), "{r:?}");
+        assert!(r.contains(&"zone ov  type vxlan".to_string()) && r.last().unwrap().contains("lost"), "{r:?}");
+        assert!(sdn_report("[]", "[]", &[])[1].contains("not set up"));
     }
 
     #[test]
