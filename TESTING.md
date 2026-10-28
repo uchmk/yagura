@@ -346,6 +346,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.50 | `F` shows whether the guest's firewall is on and its rules (disabled ones dimmed, j/k scroll); `f` or Enter asks y/n (turning it on carries a red warning) and then `pvesh set .../firewall/options --enable` switches it. |
 | 3p.51 | `i` on a storage lists everything on it biggest first, with used/total and a total per kind (iso, vztmpl, images, backup...); `d` asks y/n (a red warning, a second one for a guest disk) and then `pvesm free` deletes the volume under the cursor. |
 | 3p.52 | `w` in a task log (Tasks, Enter) or a guest's journal (`l` in the graph screen) writes every line to a new `~/yagura-<label>-<secs>.log` and says where (in the log's title, or the status line); a second `w` in the same second does not overwrite. |
+| 3p.53 | `J` on the Storage screen lists the cluster's backup jobs (on/off, id, schedule, scope -> storage, mode, next run); Enter asks y/n (turning a job off carries a red warning) and then `pvesh set /cluster/backup/<id> --enabled` switches it. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

@@ -285,6 +285,44 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ];
             (" set memory and cores ".to_string(), l)
         }
+        Dialog::Jobs { list, sel } => {
+            let mut l = vec![];
+            match list {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(j) if j.is_empty() => l.push(Line::styled("no backup jobs (Datacenter > Backup)", DIM)),
+                Some(j) => {
+                    for (i, x) in j.iter().enumerate() {
+                        let st = if i == *sel {
+                            SELECTED
+                        } else if x.enabled {
+                            Style::new()
+                        } else {
+                            DIM
+                        };
+                        let next = match x.next_run {
+                            Some(t) if x.enabled => format!("  next {}", crate::dialog::stamp(t)),
+                            _ => String::new(),
+                        };
+                        let node = if x.node.is_empty() { String::new() } else { format!(" @{}", x.node) };
+                        l.push(Line::styled(
+                            format!(
+                                " {} {}  {}  {} -> {}  {}{node}{next}",
+                                if x.enabled { "on " } else { "off" },
+                                x.id,
+                                x.schedule,
+                                x.scope,
+                                x.storage,
+                                x.mode
+                            ),
+                            st,
+                        ));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("j/k move  Enter on/off (asks first)  Esc close", DIM));
+            (" backup jobs ".to_string(), l)
+        }
         Dialog::Content { storage, fill, list, sel, .. } => {
             let mut l = vec![];
             let pct = if fill.1 > 0 { fill.0 as f64 * 100.0 / fill.1 as f64 } else { 0.0 };
@@ -523,7 +561,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  Storage: Enter backups, i contents",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1640,6 +1678,26 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_jobs_dialog_draws() {
+        let mut a = app(View::Storage);
+        a.dialog = Some(Dialog::Jobs { list: None, sel: 0 });
+        assert!(text(&render(&a)).contains("reading..."));
+        let j = |id: &str, enabled| yagura_core::proxmox::ops::BackupJob {
+            id: id.into(),
+            enabled,
+            schedule: "sat 02:00".into(),
+            storage: "nas".into(),
+            scope: "all".into(),
+            mode: "snapshot".into(),
+            node: String::new(),
+            next_run: None,
+        };
+        a.dialog = Some(Dialog::Jobs { list: Some(vec![j("backup-1", true), j("backup-2", false)]), sel: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("on  backup-1") && s.contains("off backup-2") && s.contains("sat 02:00") && s.contains("all -> nas"), "{s}");
     }
 
     #[test]

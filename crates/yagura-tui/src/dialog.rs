@@ -124,6 +124,11 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// The scheduled backup jobs of the cluster (`None` while they are read) and the cursor.
+    Jobs {
+        list: Option<Vec<ops::BackupJob>>,
+        sel: usize,
+    },
     /// Everything on a storage (`None` while it is read), the cursor, and how full the storage is (used, total).
     Content {
         node: String,
@@ -424,6 +429,19 @@ pub fn sure_maintenance(node: &str, on: bool) -> Sure {
     }
 }
 
+/// The last question for switching a backup job on or off (the opposite of what it is now).
+pub fn sure_job(j: &ops::BackupJob) -> Sure {
+    let on = !j.enabled;
+    let mut lines = vec![(
+        format!("turn the backup job {} {} ({} on {}, {})", j.id, if on { "on" } else { "off" }, j.scope, j.storage, j.schedule),
+        false,
+    )];
+    if !on {
+        lines.push(("until it is turned on again, the guests it covers are not backed up on its schedule".into(), true));
+    }
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("job {}", j.id), cmds: vec![ops::backup_job_cmd(&j.id, on)] }, lines }
+}
+
 /// The last question for deleting one volume of a storage.
 pub fn sure_vol(v: &ops::Vol) -> Sure {
     let mut lines = vec![(format!("delete {} ({}, {})", v.volid, v.content, bytes(v.size)), false)];
@@ -660,6 +678,21 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => top,
             };
             (Some(Dialog::Config { t, list, top }), Next::Nothing)
+        }
+        Dialog::Jobs { list, mut sel } => {
+            let n = list.as_ref().map_or(0, Vec::len);
+            match code {
+                KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => sel = (sel + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('k') | KeyCode::Up => sel = sel.saturating_sub(1),
+                KeyCode::Enter | KeyCode::Char('e') => {
+                    if let Some(j) = list.as_ref().and_then(|l| l.get(sel)) {
+                        return (Some(Dialog::Sure(sure_job(j))), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Jobs { list, sel }), Next::Nothing)
         }
         Dialog::Content { node, storage, fill, list, mut sel } => {
             let n = list.as_ref().map_or(0, Vec::len);
@@ -962,6 +995,34 @@ mod tests {
         assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_jobs_dialog_switches_the_job_under_the_cursor() {
+        let none = |_: &Target| None;
+        let job = |id: &str, enabled| ops::BackupJob {
+            id: id.into(),
+            enabled,
+            schedule: "daily".into(),
+            storage: "nas".into(),
+            scope: "all".into(),
+            mode: "snapshot".into(),
+            node: String::new(),
+            next_run: None,
+        };
+        let list = vec![job("backup-1", true), job("backup-2", false)];
+        let (d, _) = key(Dialog::Jobs { list: Some(list.clone()), sel: 0 }, KeyCode::Down, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        // The disabled job is turned on: no warning.
+        assert_eq!(s.op, Op::Cmds { label: "job backup-2".into(), cmds: vec![ops::backup_job_cmd("backup-2", true)] });
+        assert!(!s.lines.iter().any(|l| l.1));
+        // The enabled job is turned off: a red warning.
+        let s = sure_job(&list[0]);
+        assert_eq!(s.op, Op::Cmds { label: "job backup-1".into(), cmds: vec![ops::backup_job_cmd("backup-1", false)] });
+        assert!(s.lines.iter().any(|l| l.1));
+        let (d, _) = key(Dialog::Jobs { list: None, sel: 0 }, KeyCode::Enter, none);
+        assert!(matches!(d, Some(Dialog::Jobs { .. })));
     }
 
     #[test]

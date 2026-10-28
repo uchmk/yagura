@@ -343,6 +343,62 @@ pub fn content_totals(list: &[Vol]) -> Vec<(String, u64, usize)> {
     out
 }
 
+/// One scheduled backup job of the cluster (`Datacenter > Backup`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackupJob {
+    pub id: String,
+    pub enabled: bool,
+    pub schedule: String,
+    pub storage: String,
+    /// `all`, or the guest ids, or the pool.
+    pub scope: String,
+    pub mode: String,
+    pub node: String,
+    pub next_run: Option<u64>,
+}
+
+/// The jobs in a `/cluster/backup` listing (a job that does not say `enabled` is on).
+pub fn parse_backup_jobs(json: &str) -> Vec<BackupJob> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    v.as_array()
+        .map(|l| {
+            l.iter()
+                .filter_map(|j| {
+                    let s = |k: &str| j[k].as_str().unwrap_or("").to_string();
+                    let on = |k: &str| j[k].as_u64().map(|n| n != 0).or_else(|| j[k].as_bool());
+                    let scope = if on("all").unwrap_or(false) {
+                        "all".to_string()
+                    } else if let Some(p) = j["pool"].as_str() {
+                        format!("pool {p}")
+                    } else {
+                        s("vmid")
+                    };
+                    Some(BackupJob {
+                        id: j["id"].as_str()?.to_string(),
+                        enabled: on("enabled").unwrap_or(true),
+                        schedule: s("schedule"),
+                        storage: s("storage"),
+                        scope,
+                        mode: s("mode"),
+                        node: s("node"),
+                        next_run: j["next-run"].as_u64(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The backup jobs of the cluster (read-only `pvesh`).
+pub fn backup_jobs() -> Vec<BackupJob> {
+    pvesh("/cluster/backup", &[]).map(|j| parse_backup_jobs(&j)).unwrap_or_default()
+}
+
+/// `pvesh set /cluster/backup/<id> --enabled 0|1`.
+pub fn backup_job_cmd(id: &str, on: bool) -> Cmd {
+    Cmd::new("pvesh", &["set", &format!("/cluster/backup/{id}"), "--enabled", if on { "1" } else { "0" }])
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -717,6 +773,20 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_jobs_are_read_and_switched() {
+        let j = r#"[{"id":"backup-1","schedule":"sat 02:00","storage":"nas","all":1,"mode":"snapshot","enabled":1,"next-run":1700000000},
+                    {"id":"backup-2","schedule":"daily","storage":"local","vmid":"100,101","enabled":0,"node":"pve"},
+                    {"id":"backup-3","schedule":"mon 01:00","storage":"nas","pool":"web"},
+                    {"schedule":"x"}]"#;
+        let l = parse_backup_jobs(j);
+        assert_eq!(l.len(), 3);
+        assert_eq!((l[0].enabled, l[0].scope.as_str(), l[0].next_run), (true, "all", Some(1700000000)));
+        assert_eq!((l[1].enabled, l[1].scope.as_str(), l[1].node.as_str()), (false, "100,101", "pve"));
+        assert_eq!((l[2].enabled, l[2].scope.as_str()), (true, "pool web"));
+        assert_eq!(backup_job_cmd("backup-2", true).args, ["set", "/cluster/backup/backup-2", "--enabled", "1"]);
+    }
 
     #[test]
     fn a_log_is_saved_to_a_new_file() {

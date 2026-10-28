@@ -103,6 +103,7 @@ pub struct Ask {
 }
 
 enum Job {
+    Jobs(Vec<proxmox::ops::BackupJob>),
     Content(String, String, Vec<proxmox::ops::Vol>),
     Firewall(u32, Option<(bool, Vec<proxmox::ops::FwRule>)>),
     Cluster(Cluster),
@@ -245,6 +246,11 @@ fn run(
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Dump(f) if f.t.id == id))
                     {
                         f.last = Some(size);
+                    }
+                }
+                Job::Jobs(l) => {
+                    if let Some(dialog::Dialog::Jobs { list, .. }) = app.dialog.as_mut() {
+                        *list = Some(l);
                     }
                 }
                 Job::Content(n, s, l) => {
@@ -533,6 +539,7 @@ fn run(
             KeyCode::Enter if app.view == View::Tasks => open_task_log(app, jobs_tx),
             KeyCode::Enter if app.view == View::Storage => open_backups(app, jobs_tx),
             KeyCode::Char('i') if app.view == View::Storage => open_content(app, jobs_tx),
+            KeyCode::Char('J') if app.view == View::Storage => open_jobs(app, jobs_tx),
             _ => {}
         }
     }
@@ -876,6 +883,19 @@ fn open_content(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Content(s.node, s.name, l));
         })
         .expect("spawn the content thread");
+}
+
+/// `J` in the storage screen: the scheduled backup jobs of the cluster; Enter turns one on or off (asks first).
+fn open_jobs(app: &mut App, tx: &Sender<Job>) {
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Jobs { list: None, sel: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-jobs".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Jobs(proxmox::ops::backup_jobs()));
+        })
+        .expect("spawn the backup jobs thread");
 }
 
 /// `x` in the task screen: ask before stopping the running task under the cursor.
