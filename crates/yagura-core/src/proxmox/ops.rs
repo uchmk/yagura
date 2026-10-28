@@ -290,6 +290,64 @@ pub fn backups(node: &str, storage: &str) -> Vec<Backup> {
         .unwrap_or_default()
 }
 
+/// One volume on a storage: a disk image, ISO, container template, backup or snippet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Vol {
+    pub volid: String,
+    /// `images`, `rootdir`, `iso`, `vztmpl`, `backup`, `snippets`...
+    pub content: String,
+    pub size: u64,
+    pub vmid: u32,
+}
+
+/// The volumes in a storage content listing, biggest first.
+pub fn parse_content_list(json: &str) -> Vec<Vol> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let mut out: Vec<Vol> = v
+        .as_array()
+        .map(|l| {
+            l.iter()
+                .filter_map(|b| {
+                    Some(Vol {
+                        volid: b["volid"].as_str()?.to_string(),
+                        content: b["content"].as_str().unwrap_or("?").to_string(),
+                        size: b["size"].as_u64().unwrap_or(0),
+                        vmid: b["vmid"].as_u64().unwrap_or(0) as u32,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by_key(|b| std::cmp::Reverse(b.size));
+    out
+}
+
+/// Everything on a storage (read-only `pvesh`), biggest first.
+pub fn contents(node: &str, storage: &str) -> Vec<Vol> {
+    pvesh(&format!("/nodes/{node}/storage/{storage}/content"), &[]).map(|j| parse_content_list(&j)).unwrap_or_default()
+}
+
+/// Bytes and count per kind of content, biggest first.
+pub fn content_totals(list: &[Vol]) -> Vec<(String, u64, usize)> {
+    let mut out: Vec<(String, u64, usize)> = vec![];
+    for v in list {
+        match out.iter_mut().find(|o| o.0 == v.content) {
+            Some(o) => {
+                o.1 += v.size;
+                o.2 += 1;
+            }
+            None => out.push((v.content.clone(), v.size, 1)),
+        }
+    }
+    out.sort_by_key(|o| std::cmp::Reverse(o.1));
+    out
+}
+
+/// Delete a volume (`pvesm free`; Proxmox refuses a protected backup and a disk that is in use).
+pub fn vol_delete_cmd(v: &Vol) -> Cmd {
+    Cmd::new("pvesm", &["free", &v.volid])
+}
+
 /// Delete a backup file (`pvesm free`; Proxmox refuses a protected one).
 pub fn backup_delete_cmd(b: &Backup) -> Cmd {
     Cmd::new("pvesm", &["free", &b.volid])
@@ -642,6 +700,21 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_contents_are_totalled_and_freed() {
+        let j = r#"[{"volid":"local:iso/a.iso","content":"iso","size":300},
+                    {"volid":"local:vztmpl/d.tar.zst","content":"vztmpl","size":100},
+                    {"volid":"local:iso/b.iso","content":"iso","size":200},
+                    {"volid":"local:100/vm-100-disk-0.qcow2","content":"images","size":50,"vmid":100},
+                    {"content":"iso"}]"#;
+        let l = parse_content_list(j);
+        assert_eq!(l.len(), 4);
+        assert_eq!(l[0].volid, "local:iso/a.iso");
+        assert_eq!(content_totals(&l), [("iso".to_string(), 500, 2), ("vztmpl".to_string(), 100, 1), ("images".to_string(), 50, 1)]);
+        assert_eq!(vol_delete_cmd(&l[0]), Cmd::new("pvesm", &["free", "local:iso/a.iso"]));
+        assert!(parse_content_list("nope").is_empty());
+    }
 
     #[test]
     fn the_firewall_is_read_and_switched() {

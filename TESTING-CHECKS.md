@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-282 rows to press (282 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+283 rows to press (283 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -298,6 +298,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.48** `T` on a stopped guest asks y/n with a red warning and then `qm template` / `pct template` turns it into a template; on a running guest or a template it says why not.
 - [ ] **3p.49** `N` lists the guest's network devices; Up/Down pick one, Tab moves between bridge, VLAN and MAC (a bad VLAN or MAC turns red and Enter does nothing), Enter shows the old and new value and asks y/n; then `qm set` / `pct set --netN` applies it and `c` shows it.
 - [ ] **3p.50** `F` shows whether the guest's firewall is on and its rules (disabled ones dimmed, j/k scroll); `f` or Enter asks y/n (turning it on carries a red warning) and then `pvesh set .../firewall/options --enable` switches it.
+- [ ] **3p.51** `i` on a storage lists everything on it biggest first, with used/total and a total per kind (iso, vztmpl, images, backup...); `d` asks y/n (a red warning, a second one for a guest disk) and then `pvesm free` deletes the volume under the cursor.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

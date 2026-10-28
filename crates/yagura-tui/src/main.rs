@@ -103,6 +103,7 @@ pub struct Ask {
 }
 
 enum Job {
+    Content(String, String, Vec<proxmox::ops::Vol>),
     Firewall(u32, Option<(bool, Vec<proxmox::ops::FwRule>)>),
     Cluster(Cluster),
     Inside(u32, Inside),
@@ -244,6 +245,15 @@ fn run(
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Dump(f) if f.t.id == id))
                     {
                         f.last = Some(size);
+                    }
+                }
+                Job::Content(n, s, l) => {
+                    if let Some(dialog::Dialog::Content { list, .. }) = app
+                        .dialog
+                        .as_mut()
+                        .filter(|d| matches!(d, dialog::Dialog::Content { node, storage, .. } if *node == n && *storage == s))
+                    {
+                        *list = Some(l);
                     }
                 }
                 Job::Firewall(id, r) => {
@@ -516,6 +526,7 @@ fn run(
             KeyCode::Enter if app.view == View::Guests => open_graphs(app),
             KeyCode::Enter if app.view == View::Tasks => open_task_log(app, jobs_tx),
             KeyCode::Enter if app.view == View::Storage => open_backups(app, jobs_tx),
+            KeyCode::Char('i') if app.view == View::Storage => open_content(app, jobs_tx),
             _ => {}
         }
     }
@@ -819,6 +830,26 @@ fn open_backups(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Backups(s.node, s.name, l));
         })
         .expect("spawn the backups thread");
+}
+
+/// `i` in the storage screen: everything on the storage by kind and size; `d` deletes one volume (asks first).
+fn open_content(app: &mut App, tx: &Sender<Job>) {
+    let Some(s) = app.model.storages_sorted().get(app.selected).map(|s| (*s).clone()) else { return };
+    if !s.active {
+        app.status = format!("{} is not active", s.name);
+        return;
+    }
+    app.status.clear();
+    app.dialog =
+        Some(dialog::Dialog::Content { node: s.node.clone(), storage: s.name.clone(), fill: (s.used, s.total), list: None, sel: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-content".into())
+        .spawn(move || {
+            let l = proxmox::ops::contents(&s.node, &s.name);
+            let _ = tx.send(Job::Content(s.node, s.name, l));
+        })
+        .expect("spawn the content thread");
 }
 
 /// `x` in the task screen: ask before stopping the running task under the cursor.

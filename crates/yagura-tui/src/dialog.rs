@@ -124,6 +124,14 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// Everything on a storage (`None` while it is read), the cursor, and how full the storage is (used, total).
+    Content {
+        node: String,
+        storage: String,
+        fill: (u64, u64),
+        list: Option<Vec<ops::Vol>>,
+        sel: usize,
+    },
     /// The firewall of a guest: whether it is on and its rules (`None` while they are read), scrolled to `top`.
     Firewall {
         t: Target,
@@ -416,6 +424,19 @@ pub fn sure_maintenance(node: &str, on: bool) -> Sure {
     }
 }
 
+/// The last question for deleting one volume of a storage.
+pub fn sure_vol(v: &ops::Vol) -> Sure {
+    let mut lines = vec![(format!("delete {} ({}, {})", v.volid, v.content, bytes(v.size)), false)];
+    if matches!(v.content.as_str(), "images" | "rootdir") {
+        lines.push((
+            format!("this is a guest disk{}; the guest loses it", if v.vmid > 0 { format!(" of {}", v.vmid) } else { String::new() }),
+            true,
+        ));
+    }
+    lines.push(("a deleted volume can not be brought back".into(), true));
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("delete {}", v.volid), cmds: vec![ops::vol_delete_cmd(v)] }, lines }
+}
+
 /// The last question for switching the firewall of `t` on or off.
 pub fn sure_firewall(t: &Target, on: bool) -> Sure {
     let mut lines = vec![(format!("turn the firewall of {} {} {}", t.id, t.name, if on { "on" } else { "off" }), false)];
@@ -639,6 +660,21 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => top,
             };
             (Some(Dialog::Config { t, list, top }), Next::Nothing)
+        }
+        Dialog::Content { node, storage, fill, list, mut sel } => {
+            let n = list.as_ref().map_or(0, Vec::len);
+            match code {
+                KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => sel = (sel + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('k') | KeyCode::Up => sel = sel.saturating_sub(1),
+                KeyCode::Char('d') => {
+                    if let Some(v) = list.as_ref().and_then(|l| l.get(sel)) {
+                        return (Some(Dialog::Sure(sure_vol(v))), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Content { node, storage, fill, list, sel }), Next::Nothing)
         }
         Dialog::Firewall { t, state, mut top } => {
             let n = state.as_ref().map_or(0, |s| s.1.len());
@@ -926,6 +962,33 @@ mod tests {
         assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_content_dialog_deletes_the_volume_under_the_cursor() {
+        let none = |_: &Target| None;
+        let v = |id: &str, content: &str, size| ops::Vol { volid: id.into(), content: content.into(), size, vmid: 0 };
+        let list = vec![v("local:iso/a.iso", "iso", 9), v("local:100/vm-100-disk-0.raw", "images", 5)];
+        let d = Dialog::Content { node: "pve".into(), storage: "local".into(), fill: (1, 2), list: Some(list), sel: 0 };
+        let (d, _) = key(d, KeyCode::Down, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('d'), none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds {
+                label: "delete local:100/vm-100-disk-0.raw".into(),
+                cmds: vec![Cmd::new("pvesm", &["free", "local:100/vm-100-disk-0.raw"])]
+            }
+        );
+        // A guest disk gets the extra warning, an ISO only the general one.
+        assert_eq!(s.lines.iter().filter(|l| l.1).count(), 2);
+        assert_eq!(sure_vol(&v("local:iso/a.iso", "iso", 1)).lines.iter().filter(|l| l.1).count(), 1);
+        let (d, _) = key(
+            Dialog::Content { node: "pve".into(), storage: "local".into(), fill: (0, 0), list: None, sel: 0 },
+            KeyCode::Char('d'),
+            none,
+        );
+        assert!(matches!(d, Some(Dialog::Content { .. })));
     }
 
     #[test]

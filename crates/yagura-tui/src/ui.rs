@@ -285,6 +285,33 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ];
             (" set memory and cores ".to_string(), l)
         }
+        Dialog::Content { storage, fill, list, sel, .. } => {
+            let mut l = vec![];
+            let pct = if fill.1 > 0 { fill.0 as f64 * 100.0 / fill.1 as f64 } else { 0.0 };
+            l.push(Line::raw(format!("used {} of {} ({pct:.0}%)", bytes(fill.0), bytes(fill.1))));
+            match list {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(v) if v.is_empty() => l.push(Line::styled("nothing on it", DIM)),
+                Some(v) => {
+                    let totals: Vec<String> =
+                        yagura_core::proxmox::ops::content_totals(v).iter().map(|(c, b, n)| format!("{c} {} ({n})", bytes(*b))).collect();
+                    l.push(Line::styled(totals.join("  "), DIM));
+                    l.push(Line::raw(""));
+                    let room = (f.area().height as usize).saturating_sub(11).clamp(3, 20);
+                    let top = sel.saturating_sub(room - 1).min(v.len().saturating_sub(room));
+                    for (i, x) in v.iter().enumerate().skip(top).take(room) {
+                        let st = if i == *sel { SELECTED } else { Style::new() };
+                        l.push(Line::styled(format!("  {:<8} {:>9}  {}", x.content, bytes(x.size), x.volid), st));
+                    }
+                    if v.len() > room {
+                        l.push(Line::styled(format!("  {} of {}", sel + 1, v.len()), DIM));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("j/k move  d delete (asks first)  Esc close", DIM));
+            (format!(" contents of {storage} "), l)
+        }
         Dialog::Backups { storage, list, sel, marks, .. } => {
             let mut l = vec![];
             match list {
@@ -496,7 +523,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  Storage: Enter backups",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  Storage: Enter backups, i contents",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1613,6 +1640,19 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_content_dialog_draws() {
+        let mut a = app(View::Storage);
+        let d = |list| Dialog::Content { node: "pve".into(), storage: "local".into(), fill: (50, 100), list, sel: 0 };
+        a.dialog = Some(d(None));
+        let s = text(&render(&a));
+        assert!(s.contains("reading...") && s.contains("(50%)"), "{s}");
+        let v = |id: &str, c: &str, size| yagura_core::proxmox::ops::Vol { volid: id.into(), content: c.into(), size, vmid: 0 };
+        a.dialog = Some(d(Some(vec![v("local:iso/a.iso", "iso", 2 << 20), v("local:vztmpl/d.tar.zst", "vztmpl", 1 << 20)])));
+        let s = text(&render(&a));
+        assert!(s.contains("local:iso/a.iso") && s.contains("iso 2") && s.contains("vztmpl 1"), "{s}");
     }
 
     #[test]
