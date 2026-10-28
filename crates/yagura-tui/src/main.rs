@@ -105,6 +105,8 @@ pub struct Ask {
 }
 
 enum Job {
+    /// The lines for the open `Dialog::Text` with this title.
+    Text(&'static str, Vec<String>),
     Jobs(Vec<proxmox::ops::BackupJob>),
     Content(String, String, Vec<proxmox::ops::Vol>),
     Firewall(u32, Option<(bool, Vec<proxmox::ops::FwRule>)>),
@@ -142,7 +144,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -249,6 +251,13 @@ fn run(
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Dump(f) if f.t.id == id))
                     {
                         f.last = Some(size);
+                    }
+                }
+                Job::Text(title, l) => {
+                    if let Some(dialog::Dialog::Text { lines, .. }) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Text { title: t, .. } if t == title))
+                    {
+                        *lines = Some(l);
                     }
                 }
                 Job::Jobs(l) => {
@@ -553,6 +562,7 @@ fn run(
             KeyCode::Enter if app.view == View::Storage => open_backups(app, jobs_tx),
             KeyCode::Char('i') if app.view == View::Storage => open_content(app, jobs_tx),
             KeyCode::Char('J') if app.view == View::Storage => open_jobs(app, jobs_tx),
+            KeyCode::Char('A') if app.view == View::Host => open_access(app, jobs_tx),
             _ => {}
         }
     }
@@ -896,6 +906,21 @@ fn open_content(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Content(s.node, s.name, l));
         })
         .expect("spawn the content thread");
+}
+
+/// `A` in the host screen: the users, API tokens and permissions of the cluster (read only; Proxmox keeps these in the web UI).
+fn open_access(app: &mut App, tx: &Sender<Job>) {
+    const TITLE: &str = "users, tokens and permissions";
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Text { title: TITLE.into(), lines: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-access".into())
+        .spawn(move || {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            let _ = tx.send(Job::Text(TITLE, proxmox::ops::access(now)));
+        })
+        .expect("spawn the access thread");
 }
 
 /// `J` in the storage screen: the scheduled backup jobs of the cluster; Enter turns one on or off (asks first).

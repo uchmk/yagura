@@ -124,6 +124,12 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// A read-only page of text for the cluster as a whole (`None` while it is read) and the first line shown.
+    Text {
+        title: String,
+        lines: Option<Vec<String>>,
+        top: usize,
+    },
     /// The note of a snapshot being typed.
     SnapNote {
         t: Target,
@@ -688,6 +694,20 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => (Some(Dialog::Snaps { t, list, sel }), Next::Nothing),
             }
         }
+        Dialog::Text { title, lines, top } => {
+            let n = lines.as_ref().map_or(0, Vec::len);
+            let top = match code {
+                KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => (top + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('k') | KeyCode::Up => top.saturating_sub(1),
+                KeyCode::Char('g') | KeyCode::Home => 0,
+                KeyCode::Char('G') | KeyCode::End => n.saturating_sub(1),
+                KeyCode::PageDown | KeyCode::Char(' ') => (top + 10).min(n.saturating_sub(1)),
+                KeyCode::PageUp => top.saturating_sub(10),
+                _ => top,
+            };
+            (Some(Dialog::Text { title, lines, top }), Next::Nothing)
+        }
         Dialog::SnapNote { t, snap, mut text } => match code {
             KeyCode::Esc => (None, Next::Nothing),
             KeyCode::Char(c) if !c.is_control() && text.chars().count() < 200 => {
@@ -1029,6 +1049,28 @@ mod tests {
         assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_text_page_scrolls_and_closes() {
+        let none = |_: &Target| None;
+        let lines = Some((0..30).map(|i| i.to_string()).collect::<Vec<_>>());
+        let d = Dialog::Text { title: "t".into(), lines, top: 0 };
+        let (d, _) = key(d, KeyCode::Char('j'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::PageDown, none);
+        let Some(Dialog::Text { top, .. }) = d.clone() else { panic!("closed") };
+        assert_eq!(top, 11);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('G'), none);
+        let Some(Dialog::Text { top, .. }) = d.clone() else { panic!("closed") };
+        assert_eq!(top, 29);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('g'), none);
+        let Some(Dialog::Text { top, .. }) = d.clone() else { panic!("closed") };
+        assert_eq!(top, 0);
+        let (d, _) = key(d.unwrap(), KeyCode::Esc, none);
+        assert!(d.is_none());
+        // Nothing to scroll while it is read.
+        let (d, _) = key(Dialog::Text { title: "t".into(), lines: None, top: 0 }, KeyCode::Char('j'), none);
+        assert!(matches!(d, Some(Dialog::Text { top: 0, .. })));
     }
 
     #[test]

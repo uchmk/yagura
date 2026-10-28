@@ -405,6 +405,54 @@ pub fn backup_job_cmd(id: &str, on: bool) -> Cmd {
     Cmd::new("pvesh", &["set", &format!("/cluster/backup/{id}"), "--enabled", if on { "1" } else { "0" }])
 }
 
+/// How a user or token expiry reads: `0` is never.
+fn expiry(e: u64, now: u64) -> String {
+    match e {
+        0 => "never expires".into(),
+        e if e <= now => "EXPIRED".into(),
+        e => format!("expires in {}d", (e - now).div_ceil(86400)),
+    }
+}
+
+/// The lines of the access screen from `/access/users --full 1` and `/access/acl`: every user with its tokens, then the permissions.
+pub fn parse_access(users: &str, acl: &str, now: u64) -> Vec<String> {
+    let mut out = vec![];
+    let list = |s: &str| serde_json::from_str::<Value>(s).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let users = list(users);
+    out.push(format!("users ({})", users.len()));
+    for u in &users {
+        let Some(id) = u["userid"].as_str() else { continue };
+        let on = u["enable"].as_u64() != Some(0);
+        let groups = u["groups"].as_str().filter(|g| !g.is_empty()).map_or(String::new(), |g| format!("  groups {g}"));
+        let exp = u["expire"].as_u64().unwrap_or(0);
+        out.push(format!("  {:<24} {}  {}{groups}", id, if on { "on " } else { "OFF" }, expiry(exp, now)));
+        for t in u["tokens"].as_array().into_iter().flatten() {
+            let Some(name) = t["tokenid"].as_str() else { continue };
+            let sep = if t["privsep"].as_u64() != Some(0) { "own permissions" } else { "the user's permissions" };
+            out.push(format!("      token {name}: {sep}, {}", expiry(t["expire"].as_u64().unwrap_or(0), now)));
+        }
+    }
+    let acl = list(acl);
+    out.push(String::new());
+    out.push(format!("permissions ({})", acl.len()));
+    for a in &acl {
+        let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+        let prop = if a["propagate"].as_u64() != Some(0) { "" } else { "  (this path only)" };
+        out.push(format!("  {:<22} {:<18} {} {}{prop}", s("path"), s("roleid"), s("type"), s("ugid")));
+    }
+    out
+}
+
+/// The users, tokens and permissions of the cluster (read-only `pvesh`).
+pub fn access(now: u64) -> Vec<String> {
+    let users = pvesh("/access/users", &["--full", "1"]).unwrap_or_default();
+    let acl = pvesh("/access/acl", &[]).unwrap_or_default();
+    if users.is_empty() && acl.is_empty() {
+        return vec![];
+    }
+    parse_access(&users, &acl, now)
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -779,6 +827,23 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn users_tokens_and_permissions_are_listed() {
+        let users = r#"[{"userid":"root@pam","enable":1,"expire":0,"groups":"admins"},
+                        {"userid":"bob@pve","enable":0,"expire":1000,"tokens":[{"tokenid":"ci","privsep":0,"expire":0},{"tokenid":"ro","privsep":1,"expire":90000}]},
+                        {"enable":1}]"#;
+        let acl = r#"[{"path":"/","roleid":"Administrator","type":"user","ugid":"root@pam","propagate":1},
+                      {"path":"/vms/100","roleid":"PVEVMUser","type":"token","ugid":"bob@pve!ro","propagate":0}]"#;
+        let l = parse_access(users, acl, 2000).join("|");
+        assert!(l.contains("users (3)") && l.contains("permissions (2)"), "{l}");
+        assert!(l.contains("root@pam") && l.contains("groups admins") && l.contains("never expires"), "{l}");
+        assert!(l.contains("bob@pve") && l.contains("OFF") && l.contains("EXPIRED"), "{l}");
+        assert!(l.contains("token ci: the user's permissions") && l.contains("token ro: own permissions, expires in 2d"), "{l}");
+        assert!(l.contains("/vms/100") && l.contains("token bob@pve!ro") && l.contains("(this path only)"), "{l}");
+        assert_eq!(expiry(0, 5), "never expires");
+        assert!(parse_access("x", "y", 0).iter().all(|s| !s.contains('@')));
+    }
 
     #[test]
     fn a_snapshot_note_is_set_through_pvesh() {

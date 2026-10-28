@@ -117,6 +117,27 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("Enter next  Esc cancel", DIM));
             (format!(" backup {} {} ", form.t.id, form.t.name), l)
         }
+        Dialog::Text { title, lines, top } => {
+            let mut l = vec![];
+            match lines {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(c) if c.is_empty() => l.push(Line::styled("nothing could be read (pvesh failed, or no permission)", DIM)),
+                Some(c) => {
+                    let room = (f.area().height as usize).saturating_sub(8).clamp(3, 30);
+                    let top = (*top).min(c.len().saturating_sub(room));
+                    for s in c.iter().skip(top).take(room) {
+                        let st = if s.contains("OFF") || s.contains("EXPIRED") { RED } else { Style::new() };
+                        l.push(Line::styled(s.chars().take(96).collect::<String>(), st));
+                    }
+                    if c.len() > room {
+                        l.push(Line::styled(format!("  {}-{} of {}", top + 1, (top + room).min(c.len()), c.len()), DIM));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("j/k scroll  Space page  g/G top/bottom  Esc close  (read only)", DIM));
+            (format!(" {title} "), l)
+        }
         Dialog::SnapNote { t, snap, text } => (
             format!(" note of {snap} ({} {}) ", t.id, t.name),
             vec![
@@ -570,7 +591,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1716,6 +1737,19 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_text_page_draws() {
+        let mut a = app(View::Host);
+        a.dialog = Some(Dialog::Text { title: "users, tokens and permissions".into(), lines: None, top: 0 });
+        assert!(text(&render(&a)).contains("reading..."));
+        a.dialog = Some(Dialog::Text { title: "users, tokens and permissions".into(), lines: Some(vec![]), top: 0 });
+        assert!(text(&render(&a)).contains("nothing could be read"));
+        let lines = vec!["users (1)".to_string(), "  bob@pve  OFF  EXPIRED".to_string()];
+        a.dialog = Some(Dialog::Text { title: "users, tokens and permissions".into(), lines: Some(lines), top: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("users, tokens and permissions") && s.contains("bob@pve") && s.contains("read only"), "{s}");
     }
 
     #[test]
