@@ -223,6 +223,14 @@ pub enum Dialog {
         loaded: bool,
         err: String,
     },
+    /// Change a storage: its name and type, then `[content, enabled]`.
+    StorageEdit {
+        name: String,
+        kind: String,
+        step: usize,
+        vals: [String; 2],
+        err: String,
+    },
     /// Grow a disk of a guest: its disks (`None` while the config is read), the cursor and the GiB typed.
     Resize {
         t: Target,
@@ -489,6 +497,20 @@ pub fn sure_boot(t: &Target, vals: &[String; 4], cmd: ops::Cmd) -> Sure {
         ("it takes effect the next time the node starts guests".into(), false),
     ];
     Sure { t: Target::none(), op: Op::Cmds { label: format!("boot options of {}", t.id), cmds: vec![cmd] }, lines }
+}
+
+pub fn sure_storage_edit(name: &str, vals: &[String; 2], cmd: ops::Cmd) -> Sure {
+    let mut lines = vec![(format!("change the storage {name}"), false)];
+    if !vals[0].trim().is_empty() {
+        lines.push((format!("  it may hold {}", vals[0].trim()), false));
+    }
+    match vals[1].trim().to_ascii_lowercase().as_str() {
+        "no" | "n" | "0" => lines.push(("  disable it: guests with disks on it can no longer start".into(), true)),
+        "yes" | "y" | "1" => lines.push(("  enable it".into(), false)),
+        _ => {}
+    }
+    lines.push(("a content type taken away hides those files from the pickers, the files stay".into(), false));
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("edit storage {name}"), cmds: vec![cmd] }, lines }
 }
 
 pub fn sure_resize(t: &Target, disks: &[(String, String)], sel: usize, gib: &str) -> Option<Sure> {
@@ -1225,6 +1247,26 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
             }
             (Some(Dialog::Boot { t, step, vals, loaded, err }), Next::Nothing)
         }
+        Dialog::StorageEdit { name, kind, mut step, mut vals, mut err } => {
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Char(c) if !c.is_control() && vals[step].chars().count() < 60 => vals[step].push(c),
+                KeyCode::Backspace => {
+                    if vals[step].is_empty() && step > 0 {
+                        step -= 1;
+                    } else {
+                        vals[step].pop();
+                    }
+                }
+                KeyCode::Enter if step < 1 => step += 1,
+                KeyCode::Enter => match ops::storage_edit_cmd(&name, &vals[0], &vals[1]) {
+                    Ok(cmd) => return (Some(Dialog::Sure(sure_storage_edit(&name, &vals, cmd))), Next::Nothing),
+                    Err(e) => err = e,
+                },
+                _ => {}
+            }
+            (Some(Dialog::StorageEdit { name, kind, step, vals, err }), Next::Nothing)
+        }
         Dialog::Resize { t, disks, sel, mut gib } => {
             let n = disks.as_ref().map_or(0, Vec::len);
             let stay = |t, disks, sel, gib| (Some(Dialog::Resize { t, disks, sel, gib }), Next::Nothing);
@@ -1594,6 +1636,29 @@ mod tests {
         // Esc leaves the form.
         let (d, _) = key(Dialog::JobEdit { id: None, step: 0, vals: Default::default(), err: String::new() }, KeyCode::Esc, none);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_storage_edit_form_asks_and_checks() {
+        let none = |_: &Target| None;
+        let form = |step, vals: [&str; 2]| Dialog::StorageEdit {
+            name: "nas".into(),
+            kind: "nfs".into(),
+            step,
+            vals: vals.map(String::from),
+            err: String::new(),
+        };
+        let (d, _) = key(form(1, ["iso", ""]), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds[0].args.contains(&"iso".to_string())));
+        let (d, _) = key(form(1, ["", "no"]), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(s.lines.iter().any(|(l, red)| *red && l.contains("disable")), "{:?}", s.lines);
+        let (d, _) = key(form(1, ["", ""]), KeyCode::Enter, none);
+        let Some(Dialog::StorageEdit { err, .. }) = d else { panic!("accepted nothing") };
+        assert!(err.contains("nothing"), "{err}");
+        let (d, _) = key(form(1, ["", ""]), KeyCode::Backspace, none);
+        let Some(Dialog::StorageEdit { step: 0, .. }) = d else { panic!("did not go back") };
     }
 
     #[test]

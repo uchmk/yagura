@@ -873,6 +873,33 @@ pub fn storage_add_cmd(kind: &str, fields: &[String; 4]) -> Result<Cmd, String> 
     Ok(Cmd::new("pvesh", &args))
 }
 
+/// The call that changes what a storage may hold and whether it is enabled; an empty field is left as it is.
+pub fn storage_edit_cmd(name: &str, content: &str, enabled: &str) -> Result<Cmd, String> {
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err("the storage name is not valid".into());
+    }
+    let (content, enabled) = (content.trim(), enabled.trim().to_ascii_lowercase());
+    let path = format!("/storage/{name}");
+    let mut args = vec!["set", path.as_str()];
+    if !content.is_empty() {
+        let kinds = ["images", "rootdir", "vztmpl", "iso", "backup", "snippets"];
+        if !content.split(',').all(|c| kinds.contains(&c)) {
+            return Err("the content is a list of images, rootdir, vztmpl, iso, backup, snippets".into());
+        }
+        args.extend(["--content", content]);
+    }
+    match enabled.as_str() {
+        "" => {}
+        "yes" | "y" | "1" => args.extend(["--disable", "0"]),
+        "no" | "n" | "0" => args.extend(["--disable", "1"]),
+        _ => return Err("enabled is yes or no".into()),
+    }
+    if args.len() == 2 {
+        return Err("nothing to change".into());
+    }
+    Ok(Cmd::new("pvesh", &args))
+}
+
 /// The call that removes a storage definition from the cluster (the data on it is not touched).
 pub fn storage_remove_cmd(name: &str) -> Cmd {
     let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
@@ -1731,6 +1758,19 @@ mod tests {
             ("dir", ["", "/a", "", "backup"]),
         ] {
             assert!(storage_add_cmd(k, &f(bad)).is_err(), "{k} {bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_storage_is_edited() {
+        assert_eq!(storage_edit_cmd("nas", "backup,iso", "").unwrap().args, ["set", "/storage/nas", "--content", "backup,iso"]);
+        assert_eq!(storage_edit_cmd("nas", "", "No").unwrap().args, ["set", "/storage/nas", "--disable", "1"]);
+        assert_eq!(
+            storage_edit_cmd("nas", "images", "yes").unwrap().args,
+            ["set", "/storage/nas", "--content", "images", "--disable", "0"]
+        );
+        for bad in [("nas", "", ""), ("nas", "photos", ""), ("nas", "", "maybe"), ("a b", "iso", ""), ("", "iso", "")] {
+            assert!(storage_edit_cmd(bad.0, bad.1, bad.2).is_err(), "{bad:?}");
         }
     }
 

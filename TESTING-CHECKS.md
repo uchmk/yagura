@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-309 rows to press (309 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+310 rows to press (310 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -325,6 +325,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.75** With `webhook = "https://…"` in `tui.toml` (or `YAGURA_WEBHOOK`), a new alert is POSTed as `{"text":…,"content":…}`; with no address nothing is sent, and a dead endpoint does not stop the screen.
 - [ ] **3p.76** `n` in the Storage screen: Tab switches between nfs, dir, lvmthin and zfspool; unused fields are skipped; y/n is asked last.
 - [ ] **3p.77** `B` on a guest opens its boot options (start at boot, order, up/down delay), filled from the config; empty numbers delete `startup`; y/n is asked last.
+- [ ] **3p.78** `e` in the Storage view edits content and enabled of the storage under the cursor (empty keeps it); disabling shows a red warning, and y/n is asked last.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

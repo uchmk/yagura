@@ -380,6 +380,27 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
             (format!(" boot options of {} {} ", t.id, t.name), l)
         }
+        Dialog::StorageEdit { name, kind, step, vals, err } => {
+            let mut l = vec![];
+            for (i, n) in ["content", "enabled"].iter().enumerate() {
+                let st = if i == *step { Style::new().add_modifier(Modifier::BOLD) } else { DIM };
+                l.push(Line::styled(format!("  {n:<9} {}{}", vals[i], if i == *step { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled(
+                if *step == 0 {
+                    "what it may hold: images, rootdir, vztmpl, iso, backup, snippets (empty keeps it)"
+                } else {
+                    "yes or no; empty keeps it"
+                },
+                DIM,
+            ));
+            if !err.is_empty() {
+                l.push(Line::styled(err.clone(), RED));
+            }
+            l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
+            (format!(" edit the storage {name} ({kind}) "), l)
+        }
         Dialog::Resize { t, disks, sel, gib } => {
             let mut l = vec![];
             match disks {
@@ -2016,6 +2037,20 @@ mod tests {
         a.dialog = Some(Dialog::Text { title: "cluster and node firewall".into(), lines: Some(lines), top: 0 });
         let s = text(&render(&a));
         assert!(s.contains("cluster and node firewall") && s.contains("firewall OFF") && s.contains("no rules"), "{s}");
+    }
+
+    #[test]
+    fn the_storage_edit_form_draws() {
+        let mut a = app(View::Storage);
+        a.dialog = Some(Dialog::StorageEdit {
+            name: "nas".into(),
+            kind: "nfs".into(),
+            step: 1,
+            vals: ["backup,iso".to_string(), "no".to_string()],
+            err: String::new(),
+        });
+        let s = text(&render(&a));
+        assert!(s.contains("edit the storage nas") && s.contains("backup,iso") && s.contains("no_") && s.contains("yes or no"), "{s}");
     }
 
     #[test]
