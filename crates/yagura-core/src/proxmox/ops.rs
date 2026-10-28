@@ -838,6 +838,85 @@ pub fn certificates(now: u64) -> Vec<String> {
     pvesh(&format!("/nodes/{node}/certificates/info"), &[]).map(|j| parse_certs(&j, now)).unwrap_or_default()
 }
 
+/// The lines of the disk page from `/nodes/<n>/disks/list`; `smart` answers `/nodes/<n>/disks/smart` for a device path. Each disk
+/// shows its model, size, kind, health and wearout, then the SMART values that matter (ATA attributes or NVMe log lines).
+/// A health other than PASSED/OK/UNKNOWN is marked UNHEALTHY.
+pub fn parse_disks(list: &str, smart: &dyn Fn(&str) -> String) -> Vec<String> {
+    let v: Value = serde_json::from_str(list).unwrap_or(Value::Null);
+    let Some(a) = v.as_array() else { return vec![] };
+    let s = |x: &Value, k: &str| x[k].as_str().unwrap_or("").trim().to_string();
+    let mut out = vec![format!("disks ({})", a.len())];
+    for x in a {
+        let dev = s(x, "devpath");
+        let health = s(x, "health");
+        let bad = !matches!(health.as_str(), "" | "PASSED" | "OK" | "UNKNOWN");
+        let wear = match x["wearout"].as_u64() {
+            Some(w) => format!("  wearout {w}% left"),
+            None => String::new(),
+        };
+        out.push(format!(
+            "  {dev}  {}  {}  {}  {}{wear}{}",
+            s(x, "model"),
+            x["size"].as_u64().map_or("?".to_string(), human),
+            s(x, "type"),
+            if health.is_empty() { "?" } else { &health },
+            if bad { "  UNHEALTHY" } else { "" }
+        ));
+        let serial = s(x, "serial");
+        if !serial.is_empty() {
+            out.push(format!("    serial {serial}"));
+        }
+        let safe =
+            dev.strip_prefix("/dev/").is_some_and(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_alphanumeric() || "/_-".contains(c)));
+        if !safe {
+            continue;
+        }
+        let d: Value = serde_json::from_str(&smart(&dev)).unwrap_or(Value::Null);
+        if let Some(attrs) = d["attributes"].as_array() {
+            let keep = [5u64, 9, 187, 188, 194, 196, 197, 198];
+            let shown: Vec<String> = attrs
+                .iter()
+                .filter(|t| {
+                    let id = t["id"].as_u64().or_else(|| t["id"].as_str().and_then(|i| i.trim().parse().ok()));
+                    id.is_some_and(|i| keep.contains(&i))
+                })
+                .map(|t| format!("{} {}", t["name"].as_str().unwrap_or("?"), t["raw"].as_str().unwrap_or("?").trim()))
+                .collect();
+            if !shown.is_empty() {
+                out.push(format!("    {}", shown.join(", ")));
+            }
+        } else if let Some(t) = d["text"].as_str() {
+            for l in t.lines() {
+                let l = l.trim();
+                if [
+                    "Percentage Used",
+                    "Temperature:",
+                    "Media and Data Integrity Errors",
+                    "Power On Hours",
+                    "Critical Warning",
+                    "Available Spare:",
+                ]
+                .iter()
+                .any(|k| l.starts_with(k))
+                {
+                    out.push(format!("    {l}"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// This node's disks with their SMART health (read-only `pvesh`; one `smart` call per disk).
+pub fn node_disks() -> Vec<String> {
+    let node = this_node();
+    if node.is_empty() {
+        return vec![];
+    }
+    let Some(list) = pvesh(&format!("/nodes/{node}/disks/list"), &[]) else { return vec![] };
+    parse_disks(&list, &|dev| pvesh(&format!("/nodes/{node}/disks/smart"), &["--disk", dev]).unwrap_or_default())
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -1263,6 +1342,30 @@ mod tests {
             assert!(backup_job_save_cmd(None, &bad).is_err(), "{bad:?}");
         }
         assert_eq!(backup_job_delete_cmd("backup-1").args, ["delete", "/cluster/backup/backup-1"]);
+    }
+
+    #[test]
+    fn disks_show_health_wearout_and_smart_values() {
+        let list = r#"[{"devpath":"/dev/sda","model":"Samsung SSD 870","size":1000204886016,"type":"ssd","health":"PASSED","wearout":98,"serial":"S1"},
+                       {"devpath":"/dev/nvme0n1","model":"WD","size":500107862016,"type":"nvme","health":"FAILED"},
+                       {"devpath":"/dev/../etc","model":"x","size":1,"type":"hdd","health":"OK"}]"#;
+        let smart = |d: &str| {
+            match d {
+            "/dev/sda" => r#"{"health":"PASSED","attributes":[{"id":" 5","name":"Reallocated_Sector_Ct","raw":"0"},{"id":9,"name":"Power_On_Hours","raw":"1234"},{"id":"1","name":"Raw_Read_Error_Rate","raw":"7"}]}"#.to_string(),
+            "/dev/nvme0n1" => r#"{"health":"FAILED","text":"Critical Warning:   0x04\nTemperature:  41 Celsius\nFoo: 1"}"#.to_string(),
+            other => panic!("asked for {other}"),
+        }
+        };
+        let l = parse_disks(list, &smart);
+        assert_eq!(l[0], "disks (3)");
+        assert_eq!(l[1], "  /dev/sda  Samsung SSD 870  931.5 GiB  ssd  PASSED  wearout 98% left");
+        assert_eq!(l[2], "    serial S1");
+        assert_eq!(l[3], "    Reallocated_Sector_Ct 0, Power_On_Hours 1234");
+        assert!(l[4].contains("/dev/nvme0n1") && l[4].ends_with("FAILED  UNHEALTHY"), "{l:?}");
+        assert_eq!(l[5], "    Critical Warning:   0x04");
+        assert_eq!(l[6], "    Temperature:  41 Celsius");
+        assert!(l[7].contains("/dev/../etc") && l.len() == 8, "{l:?}");
+        assert!(parse_disks("x", &smart).is_empty());
     }
 
     #[test]
