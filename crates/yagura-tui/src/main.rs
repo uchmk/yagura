@@ -145,7 +145,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -570,6 +570,7 @@ fn run(
             KeyCode::Char('J') if app.view == View::Storage => open_jobs(app, jobs_tx),
             KeyCode::Char('A') if app.view == View::Host => open_access(app, jobs_tx),
             KeyCode::Char('E') if app.view == View::Host => open_ha(app, jobs_tx),
+            KeyCode::Char('R') if app.view == View::Host => open_replication(app, jobs_tx),
             _ => {}
         }
     }
@@ -926,6 +927,21 @@ fn open_ha(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Ha(proxmox::ops::ha()));
         })
         .expect("spawn the HA thread");
+}
+
+/// `R` in the host screen: the replication jobs and how their last runs went (read only).
+fn open_replication(app: &mut App, tx: &Sender<Job>) {
+    const TITLE: &str = "replication";
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Text { title: TITLE.into(), lines: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-replication".into())
+        .spawn(move || {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            let _ = tx.send(Job::Text(TITLE, proxmox::ops::replication(now)));
+        })
+        .expect("spawn the replication thread");
 }
 
 /// `A` in the host screen: the users, API tokens and permissions of the cluster (read only; Proxmox keeps these in the web UI).

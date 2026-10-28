@@ -153,7 +153,7 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                     let room = (f.area().height as usize).saturating_sub(8).clamp(3, 30);
                     let top = (*top).min(c.len().saturating_sub(room));
                     for s in c.iter().skip(top).take(room) {
-                        let st = if s.contains("OFF") || s.contains("EXPIRED") { RED } else { Style::new() };
+                        let st = if s.contains("OFF") || s.contains("EXPIRED") || s.contains("FAILING") { RED } else { Style::new() };
                         l.push(Line::styled(s.chars().take(96).collect::<String>(), st));
                     }
                     if c.len() > room {
@@ -618,7 +618,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1783,6 +1783,19 @@ mod tests {
         a.dialog = Some(Dialog::Ha { list: Some(vec![r("vm:100", "started", "started"), r("ct:101", "disabled", "")]), sel: 0 });
         let s = text(&render(&a));
         assert!(s.contains("vm:100") && s.contains("started on pve2") && s.contains("wanted disabled") && s.contains("group main"), "{s}");
+    }
+
+    #[test]
+    fn the_replication_page_draws() {
+        let mut a = app(View::Host);
+        let lines = vec![
+            "replication jobs (1)".to_string(),
+            "  100-0  pve1 -> pve2  */15".to_string(),
+            "           FAILING x2: no route".to_string(),
+        ];
+        a.dialog = Some(Dialog::Text { title: "replication".into(), lines: Some(lines), top: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("replication jobs (1)") && s.contains("pve1 -> pve2") && s.contains("FAILING x2"), "{s}");
     }
 
     #[test]

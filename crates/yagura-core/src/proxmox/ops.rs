@@ -499,6 +499,66 @@ pub fn access(now: u64) -> Vec<String> {
     parse_access(&users, &acl, now)
 }
 
+/// "5m ago" / "in 10m" for a time on the clock (0 or missing reads as "never").
+fn when(t: u64, now: u64) -> String {
+    let span = |s: u64| match s {
+        0..=89 => format!("{s}s"),
+        90..=5399 => format!("{}m", s.div_ceil(60)),
+        5400..=129_599 => format!("{}h", s.div_ceil(3600)),
+        s => format!("{}d", s.div_ceil(86400)),
+    };
+    match t {
+        0 => "never".into(),
+        t if t <= now => format!("{} ago", span(now - t)),
+        t => format!("in {}", span(t - now)),
+    }
+}
+
+/// The lines of the replication screen: each job of `/cluster/replication` with its row from the source node's `/nodes/<n>/replication`.
+pub fn parse_replication(jobs: &str, statuses: &[String], now: u64) -> Vec<String> {
+    let list = |s: &str| serde_json::from_str::<Value>(s).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let rows: Vec<Value> = statuses.iter().flat_map(|s| list(s)).collect();
+    let jobs = list(jobs);
+    let mut out = vec![format!("replication jobs ({})", jobs.len())];
+    for j in &jobs {
+        let Some(id) = j["id"].as_str() else { continue };
+        let s = |k: &str| j[k].as_str().unwrap_or("").to_string();
+        let off = if j["disable"].as_u64() == Some(1) { "  OFF" } else { "" };
+        let rate = j["rate"].as_f64().map_or(String::new(), |r| format!("  rate {r} MB/s"));
+        out.push(format!("  {:<8} {} -> {}  {}{rate}{off}", id, s("source"), s("target"), s("schedule")));
+        let Some(r) = rows.iter().find(|r| r["id"].as_str() == Some(id)) else { continue };
+        let fails = r["fail_count"].as_u64().unwrap_or(0);
+        let took = r["duration"].as_f64().map_or(String::new(), |d| format!(" ({d:.0}s)"));
+        let last = r["last_sync"].as_u64().unwrap_or(0);
+        let next = r["next_sync"].as_u64().unwrap_or(0);
+        if fails > 0 {
+            let err = r["error"].as_str().unwrap_or("");
+            out.push(format!("           FAILING x{fails}: {err}"));
+        }
+        out.push(format!("           last {}{took}, next {}", when(last, now), when(next, now)));
+    }
+    out
+}
+
+/// The replication jobs of the cluster and how their last runs went (read-only `pvesh`).
+pub fn replication(now: u64) -> Vec<String> {
+    let jobs = pvesh("/cluster/replication", &[]).unwrap_or_default();
+    if jobs.is_empty() {
+        return vec![];
+    }
+    let mut nodes: Vec<String> = serde_json::from_str::<Value>(&jobs)
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|j| j["source"].as_str().map(String::from))
+        .collect();
+    nodes.sort();
+    nodes.dedup();
+    let rows: Vec<String> = nodes.iter().filter_map(|n| pvesh(&format!("/nodes/{n}/replication"), &[])).collect();
+    parse_replication(&jobs, &rows, now)
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -873,6 +933,22 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replication_jobs_show_their_last_run() {
+        let jobs = r#"[{"id":"100-0","source":"pve1","target":"pve2","schedule":"*/15","rate":10.0},{"id":"101-0","source":"pve1","target":"pve3","schedule":"daily","disable":1},{"x":1}]"#;
+        let st = r#"[{"id":"100-0","last_sync":940,"next_sync":1600,"duration":3.2,"fail_count":2,"error":"no route"}]"#.to_string();
+        let l = parse_replication(jobs, &[st], 1000);
+        assert_eq!(l[0], "replication jobs (3)");
+        assert!(l[1].contains("100-0") && l[1].contains("pve1 -> pve2") && l[1].contains("*/15") && l[1].contains("rate 10 MB/s"), "{l:?}");
+        assert!(l[2].contains("FAILING x2: no route"), "{l:?}");
+        assert!(l[3].contains("last 60s ago (3s)") && l[3].contains("next in 10m"), "{l:?}");
+        assert!(l[4].contains("101-0") && l[4].contains("OFF"));
+        assert_eq!(l.len(), 5);
+        assert_eq!(when(0, 5), "never");
+        assert_eq!(when(10_000 - 7200, 10_000), "2h ago");
+        assert!(parse_replication("x", &[], 0)[0].contains("(0)"));
+    }
 
     #[test]
     fn ha_resources_join_their_live_state() {
