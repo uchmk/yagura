@@ -1371,6 +1371,70 @@ pub fn config(node: &str, kind: Kind, id: u32) -> Option<Vec<(String, String)>> 
     pvesh(&format!("/nodes/{node}/{what}/{id}/config"), &[]).map(|j| parse_config(&j)).filter(|c| !c.is_empty())
 }
 
+/// The tags and the note of a guest's configuration, as the form shows them: tags joined with `;`, a note of several lines on one
+/// line (` / ` between the lines).
+pub fn notes_fields(cfg: &[(String, String)]) -> [String; 2] {
+    let get = |k: &str| cfg.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    let tags = get("tags").split([';', ',', ' ']).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(";");
+    let note = get("description").lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ");
+    [tags, note]
+}
+
+/// The tags written the way Proxmox keeps them: split on `;` `,` and blanks, each a word (letters, digits, `_`, and `-+.` after the
+/// first), lower-cased, without repeats, joined with `;`.
+pub fn clean_tags(s: &str) -> Result<String, String> {
+    let mut out: Vec<String> = vec![];
+    for t in s.split([';', ',', ' ']).filter(|t| !t.is_empty()) {
+        let ok = t.len() <= 32
+            && t.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            && t.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+' | b'.'));
+        if !ok {
+            return Err(format!("tag {t}: letters, digits and _ - + . only, up to 32"));
+        }
+        let t = t.to_ascii_lowercase();
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    Ok(out.join(";"))
+}
+
+/// `qm set` / `pct set` for the tags and the note that differ from `orig` (an emptied one is deleted).
+pub fn notes_cmd(kind: Kind, id: u32, v: &[String; 2], orig: &[String; 2]) -> Result<Cmd, String> {
+    let tags = clean_tags(&v[0])?;
+    let note = v[1].trim();
+    if note.chars().any(char::is_control) || note.chars().count() > 200 {
+        return Err("the note is one line of up to 200 characters".into());
+    }
+    if note.starts_with('-') {
+        return Err("the note may not start with -".into());
+    }
+    let mut args = vec!["set".to_string(), id.to_string()];
+    let mut gone = vec![];
+    if tags != clean_tags(&orig[0]).unwrap_or_default() {
+        if tags.is_empty() {
+            gone.push("tags");
+        } else {
+            args.extend(["--tags".to_string(), tags]);
+        }
+    }
+    if note != orig[1].trim() {
+        if note.is_empty() {
+            gone.push("description");
+        } else {
+            args.extend(["--description".to_string(), note.to_string()]);
+        }
+    }
+    if !gone.is_empty() {
+        args.extend(["--delete".to_string(), gone.join(",")]);
+    }
+    if args.len() == 2 {
+        return Err("nothing changed".into());
+    }
+    let prog = if kind == Kind::Lxc { "pct" } else { "qm" };
+    Ok(Cmd { prog: prog.into(), args })
+}
+
 /// A name Proxmox takes for a new guest (a DNS-like name: letters, digits, `-` and `.`; starts with a letter or digit).
 pub fn valid_guest_name(s: &str) -> bool {
     !s.is_empty()
@@ -2339,6 +2403,26 @@ mod tests {
         let bad = ["x", "", "", "", "", ""].map(String::from);
         assert!(backup_prune_cmd("b", &bad).is_err() && backup_prune_cmd("a b", &v).is_err());
         assert!(backup_prune_cmd("b", &["99999", "", "", "", "", ""].map(String::from)).is_err());
+    }
+
+    #[test]
+    fn tags_and_note_are_read_and_set() {
+        let cfg = vec![("tags".to_string(), "Prod;web".to_string()), ("description".to_string(), "front\n\nend ".to_string())];
+        let o = notes_fields(&cfg);
+        assert_eq!(o, ["Prod;web", "front / end"]);
+        assert_eq!(clean_tags("Prod, web web;db").unwrap(), "prod;web;db");
+        assert!(clean_tags("a/b").is_err() && clean_tags("-x").is_err() && clean_tags("").unwrap().is_empty());
+        let v = |a: &str, b: &str| [a.to_string(), b.to_string()];
+        let c = notes_cmd(Kind::Qemu, 100, &v("prod;web;db", "front / end"), &o).unwrap();
+        assert_eq!((c.prog.as_str(), c.args), ("qm", ["set", "100", "--tags", "prod;web;db"].map(String::from).to_vec()));
+        let c = notes_cmd(Kind::Lxc, 101, &v("", "new note"), &o).unwrap();
+        assert_eq!(
+            (c.prog.as_str(), c.args),
+            ("pct", ["set", "101", "--description", "new note", "--delete", "tags"].map(String::from).to_vec())
+        );
+        assert_eq!(notes_cmd(Kind::Qemu, 1, &v("", ""), &o).unwrap().args, ["set", "1", "--delete", "tags,description"]);
+        assert_eq!(notes_cmd(Kind::Qemu, 1, &v("Prod web", "front / end"), &o).unwrap_err(), "nothing changed");
+        assert!(notes_cmd(Kind::Qemu, 1, &v("", "-x"), &o).is_err());
     }
 
     #[test]

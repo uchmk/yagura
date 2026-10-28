@@ -186,7 +186,12 @@ impl Model {
             .cluster
             .guests
             .iter()
-            .filter(|g| needle.is_empty() || g.name.to_lowercase().contains(&needle) || g.id.to_string().contains(&needle))
+            .filter(|g| {
+                needle.is_empty()
+                    || g.name.to_lowercase().contains(&needle)
+                    || g.id.to_string().contains(&needle)
+                    || g.tags.iter().any(|t| t.to_lowercase().contains(&needle))
+            })
             .collect();
         let swap = |g: &Guest| g.swap.and_then(|s| s.fraction()).unwrap_or(-1.0);
         v.sort_by(|a, b| {

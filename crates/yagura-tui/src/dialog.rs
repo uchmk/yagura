@@ -238,6 +238,14 @@ pub enum Dialog {
         field: usize,
         err: String,
     },
+    /// The tags and the note of a guest (`A`). `orig` is what the config had, so only what changed is written.
+    Notes {
+        t: Target,
+        v: [String; 2],
+        orig: [String; 2],
+        field: usize,
+        loaded: bool,
+    },
     /// The cloud-init settings of a VM (`I`): user, IP, DNS, search domain, SSH keys file. Empty fields are left as they are.
     CloudInit {
         t: Target,
@@ -1609,6 +1617,33 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
             }
             (Some(Dialog::Retention { id, vals, field, err }), Next::Nothing)
         }
+        Dialog::Notes { t, mut v, orig, mut field, loaded } => {
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Tab | KeyCode::Down | KeyCode::BackTab | KeyCode::Up => field = 1 - field,
+                KeyCode::Backspace => {
+                    v[field].pop();
+                }
+                KeyCode::Char(c) if !c.is_control() => {
+                    if v[field].chars().count() < 200 {
+                        v[field].push(c);
+                    }
+                }
+                KeyCode::Enter if loaded => {
+                    if let Ok(cmd) = ops::notes_cmd(t.kind, t.id, &v, &orig) {
+                        let tags = ops::clean_tags(&v[0]).unwrap_or_default();
+                        let lines = vec![
+                            (format!("tags: {}", if tags.is_empty() { "(none)" } else { &tags }), false),
+                            (format!("note: {}", if v[1].trim().is_empty() { "(none)" } else { v[1].trim() }), false),
+                        ];
+                        let s = Sure { t: t.clone(), op: Op::Cmds { label: format!("tags and note of {}", t.id), cmds: vec![cmd] }, lines };
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Notes { t, v, orig, field, loaded }), Next::Nothing)
+        }
         Dialog::CloudInit { t, mut v, mut field, loaded } => {
             let n = v.len();
             match code {
@@ -2495,6 +2530,23 @@ mod tests {
             }
         );
         assert!(s.lines.iter().any(|(_, red)| *red));
+    }
+
+    #[test]
+    fn tags_and_note_are_edited_and_set() {
+        let none = |_: &Target| None;
+        let mut t = Target::none();
+        t.id = 7;
+        let orig = ["web".to_string(), String::new()];
+        let d = Dialog::Notes { t, v: orig.clone(), orig, field: 0, loaded: true };
+        let (d, _) = key(d, KeyCode::Char(' '), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('D'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Tab, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('x'), none);
+        let Some(Dialog::Sure(s)) = key(d.unwrap(), KeyCode::Enter, none).0 else { panic!("no question") };
+        let Op::Cmds { cmds, .. } = &s.op else { panic!("not commands") };
+        assert_eq!(cmds[0].args, ["set", "7", "--tags", "web;d", "--description", "x"]);
+        assert_eq!(s.t.id, 7);
     }
 
     #[test]

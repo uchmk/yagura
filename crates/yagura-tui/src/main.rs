@@ -356,6 +356,13 @@ fn run(
                         *vals = proxmox::ops::boot_fields(&l);
                         *loaded = true;
                     }
+                    if let Some(dialog::Dialog::Notes { v, orig, loaded, .. }) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Notes { t, .. } if t.id == id))
+                    {
+                        *orig = proxmox::ops::notes_fields(&l);
+                        *v = orig.clone();
+                        *loaded = true;
+                    }
                     if let Some(dialog::Dialog::CloudInit { t, v, loaded, .. }) =
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::CloudInit { t, .. } if t.id == id))
                     {
@@ -577,6 +584,7 @@ fn run(
             KeyCode::Char('P') if app.view == View::Guests => open_templates(app, jobs_tx),
             KeyCode::Char('W') if matches!(app.view, View::Guests | View::Graph(_)) => open_hardware(app, jobs_tx),
             KeyCode::Char('I') if matches!(app.view, View::Guests | View::Graph(_)) => open_cloudinit(app, jobs_tx),
+            KeyCode::Char('A') if matches!(app.view, View::Guests | View::Graph(_)) => open_notes(app, jobs_tx),
             KeyCode::Char('n') if app.view == View::Guests => open_node(app),
             KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
             KeyCode::Char('M') if matches!(app.view, View::Guests | View::Graph(_)) => open_migrate(app),
@@ -878,6 +886,14 @@ fn open_cloudinit(app: &mut App, tx: &Sender<Job>) {
     }
     app.status.clear();
     app.dialog = Some(dialog::Dialog::CloudInit { t: t.clone(), v: Default::default(), field: 0, loaded: false });
+    read_config(t, tx);
+}
+
+/// `A`: the tags and the note of a guest; the config is read in the background.
+fn open_notes(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = target(app) else { return };
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Notes { t: t.clone(), v: Default::default(), orig: Default::default(), field: 0, loaded: false });
     read_config(t, tx);
 }
 

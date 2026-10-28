@@ -442,6 +442,24 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ));
             (" retention ".to_string(), l)
         }
+        Dialog::Notes { t, v, orig, field, loaded } => {
+            let mut l =
+                vec![Line::styled(format!("{} {}: tags and note", t.id, t.name), Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
+            for (i, label) in ["tags (separated by blanks, kept as a;b)", "note (one line)"].iter().enumerate() {
+                let on = i == *field;
+                let st = if on { Style::new().add_modifier(Modifier::BOLD) } else { Style::new() };
+                l.push(Line::styled(format!(" {label}"), DIM));
+                l.push(Line::styled(format!("   {}{}", v[i], if on { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            if !loaded {
+                l.push(Line::styled("reading the configuration...", DIM));
+            } else if let Err(e) = yagura_core::proxmox::ops::notes_cmd(t.kind, t.id, v, orig) {
+                l.push(Line::styled(e, RED));
+            }
+            l.push(Line::styled("Tab field  Enter ask  Esc close  (a note of several lines is shown on one line)", DIM));
+            (" tags and note ".to_string(), l)
+        }
         Dialog::CloudInit { t, v, field, loaded } => {
             let mut l =
                 vec![Line::styled(format!("{} {}: cloud-init", t.id, t.name), Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
@@ -2455,6 +2473,18 @@ mod tests {
             Some(Dialog::Retention { id: "backup-1".into(), vals, field: 2, err: "keep-last is a number of backups to keep".into() });
         let s = text(&render(&a));
         assert!(s.contains("backup-1") && s.contains("keep-daily") && s.contains("7_") && s.contains("number of backups"), "{s}");
+    }
+
+    #[test]
+    fn the_tags_and_note_form_draws() {
+        let mut a = app(View::Guests);
+        let orig = ["web".to_string(), String::new()];
+        a.dialog = Some(Dialog::Notes { t: crate::dialog::Target::none(), v: orig.clone(), orig: orig.clone(), field: 0, loaded: false });
+        assert!(text(&render(&a)).contains("reading the configuration"));
+        let v = ["web db".to_string(), "front".to_string()];
+        a.dialog = Some(Dialog::Notes { t: crate::dialog::Target::none(), v, orig, field: 1, loaded: true });
+        let s = text(&render(&a));
+        assert!(s.contains("web db") && s.contains("front_") && s.contains("tags and note"), "{s}");
     }
 
     #[test]
