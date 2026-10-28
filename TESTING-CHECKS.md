@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-312 rows to press (312 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+313 rows to press (313 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -328,6 +328,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.78** `e` in the Storage view edits content and enabled of the storage under the cursor (empty keeps it); disabling shows a red warning, and y/n is asked last.
 - [ ] **3p.79** `I` in the host screen counts the waiting updates, then asks y/n (red: a restart may be needed) before `apt-get dist-upgrade -y` on this node.
 - [ ] **3p.80** `webhook_kinds` in tui.toml (or YAGURA_WEBHOOK_KINDS) limits which alert kinds are POSTed; empty sends all; the screen and bell still show every alert.
+- [ ] **3p.81** In the guest network dialog (`N`), F2 adds a NIC in the first free `netN` (VM: virtio, container: `ethN` with DHCP) after y/n, F3 removes the selected one (red); in the grow dialog (`z`), F2 adds a disk of the typed GiB on the selected disk's storage (VM `scsiN`, container `mpN` at `/mnt/diskN`) without touching a CD-ROM or cloud-init drive.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

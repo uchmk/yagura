@@ -315,7 +315,10 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 }
             }
             l.push(Line::raw(""));
-            l.push(Line::styled("Up/Down device  Tab field  Enter ask  Esc cancel (empty VLAN: no tag)", DIM));
+            l.push(Line::styled(
+                "Up/Down device  Tab field  Enter change  F2 add a device (bridge, VLAN)  F3 remove  Esc cancel (empty VLAN: no tag)",
+                DIM,
+            ));
             (format!(" network of {} {} ", t.id, t.name), l)
         }
         Dialog::Clone { t, name, full } => {
@@ -401,7 +404,7 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
             (format!(" edit the storage {name} ({kind}) "), l)
         }
-        Dialog::Resize { t, disks, sel, gib } => {
+        Dialog::Resize { t, disks, sel, gib, .. } => {
             let mut l = vec![];
             match disks {
                 None => l.push(Line::styled("reading...", DIM)),
@@ -415,7 +418,10 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             }
             l.push(Line::raw(""));
             l.push(Line::raw(format!("  grow by (GiB): {gib}_")));
-            l.push(Line::styled("j/k disk  digits GiB  Enter ask  Esc cancel", DIM));
+            l.push(Line::styled(
+                "j/k disk  digits GiB  Enter grow  F2 add a disk of that size (on the storage of the selected one)  Esc cancel",
+                DIM,
+            ));
             (format!(" grow a disk of {} {} ", t.id, t.name), l)
         }
         Dialog::Edit(form) => {
@@ -2281,9 +2287,10 @@ mod tests {
         use crate::dialog::Target;
         let t = Target { id: 100, name: "vm".into(), kind: Kind::Qemu, node: "pve".into(), maxmem: 0, used: 0, template: false };
         let mut a = app(View::Guests);
-        a.dialog = Some(Dialog::Resize { t: t.clone(), disks: None, sel: 0, gib: String::new() });
+        a.dialog = Some(Dialog::Resize { t: t.clone(), disks: None, keys: vec![], sel: 0, gib: String::new() });
         assert!(text(&render(&a)).contains("reading..."));
-        a.dialog = Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), sel: 0, gib: "10".into() });
+        a.dialog =
+            Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), keys: vec![], sel: 0, gib: "10".into() });
         let s = text(&render(&a));
         assert!(s.contains("scsi0") && s.contains("size=32G") && s.contains("10_"), "{s}");
     }

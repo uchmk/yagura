@@ -235,6 +235,7 @@ pub enum Dialog {
     Resize {
         t: Target,
         disks: Option<Vec<(String, String)>>,
+        keys: Vec<String>,
         sel: usize,
         gib: String,
     },
@@ -526,6 +527,54 @@ pub fn sure_resize(t: &Target, disks: &[(String, String)], sel: usize, gib: &str
         op: Op::Cmds { label: format!("grow {key} by {gib} GiB"), cmds: vec![ops::resize_cmd(t.kind, t.id, key, gib)] },
         lines,
     })
+}
+
+/// The last question for adding a disk of `gib` GiB on the storage of the selected disk (`disks[sel]`); `keys` are all config keys.
+pub fn sure_disk_add(t: &Target, disks: &[(String, String)], keys: &[String], sel: usize, gib: &str) -> Option<Sure> {
+    let (_, value) = disks.get(sel)?;
+    let storage = value.split(':').next().filter(|_| value.contains(':'))?;
+    let gib: u32 = gib.parse().ok().filter(|g| (1..=65536).contains(g))?;
+    let (dev, new, cmd) = ops::disk_add_cmd(t.kind, t.id, keys, storage, gib)?;
+    let lines = vec![
+        (format!("add {dev} to {} {}: {new}", t.id, t.name), false),
+        (format!("  {gib} GiB on {storage}, the storage of {}", disks[sel].0), false),
+        ("a new disk is empty: a VM still needs it partitioned and mounted inside the guest".into(), true),
+    ];
+    Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("add {dev} ({gib} GiB)"), cmds: vec![cmd] }, lines })
+}
+
+/// The last question for adding a network device on `bridge` (empty `vlan`: no tag); `keys` are all config keys.
+pub fn sure_net_add(t: &Target, keys: &[String], bridge: &str, vlan: &str) -> Option<Sure> {
+    if !(vlan.is_empty() || vlan.parse::<u32>().is_ok_and(|v| (1..=4094).contains(&v))) {
+        return None;
+    }
+    let (dev, value, cmd) = ops::net_add_cmd(t.kind, t.id, keys, bridge, vlan)?;
+    let lines = vec![
+        (format!("add {dev} to {} {}", t.id, t.name), false),
+        (format!("  {value}"), false),
+        ("a new MAC is made by Proxmox; a container asks DHCP for its address".into(), false),
+    ];
+    Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("add {dev}"), cmds: vec![cmd] }, lines })
+}
+
+/// The last question for removing the network device `nets[sel]`.
+pub fn sure_net_del(t: &Target, nets: &[(String, String)], sel: usize) -> Option<Sure> {
+    let (dev, value) = nets.get(sel)?;
+    let lines = vec![
+        (format!("remove {dev} of {} {}", t.id, t.name), true),
+        (format!("  now {value}"), false),
+        ("the guest loses this connection; a running VM keeps the card until it is restarted".into(), true),
+    ];
+    Some(Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("remove {dev}"), cmds: vec![ops::net_del_cmd(t.kind, t.id, dev)] },
+        lines,
+    })
+}
+
+/// The keys of `(key, value)` pairs.
+fn keys_of(l: &[(String, String)]) -> Vec<String> {
+    l.iter().map(|(k, _)| k.clone()).collect()
 }
 
 /// The last question for the maintenance mode of a node (HA clusters only; the tool says so otherwise).
@@ -1192,6 +1241,16 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                     2 if (c.is_ascii_hexdigit() || c == ':') && mac.len() < 17 => mac.push(c),
                     _ => {}
                 },
+                KeyCode::F(2) => {
+                    if let Some(s) = sure_net_add(&t, &keys_of(nets.as_deref().unwrap_or(&[])), &bridge, &vlan) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                KeyCode::F(3) => {
+                    if let Some(s) = sure_net_del(&t, nets.as_deref().unwrap_or(&[]), sel) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
                 KeyCode::Enter => {
                     if let Some(s) = sure_net(&t, nets.as_deref().unwrap_or(&[]), sel, &bridge, &vlan, &mac) {
                         return (Some(Dialog::Sure(s)), Next::Nothing);
@@ -1278,26 +1337,30 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
             }
             (Some(Dialog::StorageEdit { name, kind, step, vals, err }), Next::Nothing)
         }
-        Dialog::Resize { t, disks, sel, mut gib } => {
+        Dialog::Resize { t, disks, keys, sel, mut gib } => {
             let n = disks.as_ref().map_or(0, Vec::len);
-            let stay = |t, disks, sel, gib| (Some(Dialog::Resize { t, disks, sel, gib }), Next::Nothing);
+            let stay = |t, disks, keys, sel, gib| (Some(Dialog::Resize { t, disks, keys, sel, gib }), Next::Nothing);
             match code {
                 KeyCode::Esc => (None, Next::Nothing),
-                KeyCode::Char('j') | KeyCode::Down => stay(t, disks, (sel + 1).min(n.saturating_sub(1)), gib),
-                KeyCode::Char('k') | KeyCode::Up => stay(t, disks, sel.saturating_sub(1), gib),
+                KeyCode::Char('j') | KeyCode::Down => stay(t, disks, keys, (sel + 1).min(n.saturating_sub(1)), gib),
+                KeyCode::Char('k') | KeyCode::Up => stay(t, disks, keys, sel.saturating_sub(1), gib),
                 KeyCode::Char(c) if c.is_ascii_digit() && gib.len() < 5 => {
                     gib.push(c);
-                    stay(t, disks, sel, gib)
+                    stay(t, disks, keys, sel, gib)
                 }
                 KeyCode::Backspace => {
                     gib.pop();
-                    stay(t, disks, sel, gib)
+                    stay(t, disks, keys, sel, gib)
                 }
                 KeyCode::Enter => match sure_resize(&t, disks.as_deref().unwrap_or(&[]), sel, &gib) {
                     Some(s) => (Some(Dialog::Sure(s)), Next::Nothing),
-                    None => stay(t, disks, sel, gib),
+                    None => stay(t, disks, keys, sel, gib),
                 },
-                _ => stay(t, disks, sel, gib),
+                KeyCode::F(2) => match sure_disk_add(&t, disks.as_deref().unwrap_or(&[]), &keys, sel, &gib) {
+                    Some(s) => (Some(Dialog::Sure(s)), Next::Nothing),
+                    None => stay(t, disks, keys, sel, gib),
+                },
+                _ => stay(t, disks, keys, sel, gib),
             }
         }
         Dialog::Node { node, stopped, running } => {
@@ -1958,7 +2021,7 @@ mod tests {
     fn the_resize_dialog_picks_a_disk_and_asks_before_growing() {
         let none = |_: &Target| None;
         let disks = vec![("scsi0".to_string(), "a:d0,size=32G".to_string()), ("scsi1".to_string(), "a:d1,size=8G".to_string())];
-        let d = Dialog::Resize { t: target(Kind::Qemu), disks: Some(disks), sel: 0, gib: String::new() };
+        let d = Dialog::Resize { t: target(Kind::Qemu), disks: Some(disks), keys: vec![], sel: 0, gib: String::new() };
         // No number yet: Enter stays.
         let (d, _) = key(d, KeyCode::Enter, none);
         let (d, _) = key(d.unwrap(), KeyCode::Char('j'), none);
@@ -1966,6 +2029,59 @@ mod tests {
         let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
         let Some(Dialog::Sure(s)) = d else { panic!("no question") };
         assert_eq!(s.op, Op::Cmds { label: "grow scsi1 by 5 GiB".into(), cmds: vec![ops::resize_cmd(Kind::Qemu, 101, "scsi1", 5)] });
+    }
+
+    #[test]
+    fn nics_and_disks_are_added_and_removed_from_their_dialogs() {
+        let none = |_: &Target| None;
+        let nets = vec![("net0".to_string(), "virtio=BC:24:11:00:00:01,bridge=vmbr0".to_string())];
+        let d = Dialog::Net {
+            t: target(Kind::Qemu),
+            nets: Some(nets),
+            sel: 0,
+            field: 0,
+            bridge: "vmbr1".into(),
+            vlan: "5".into(),
+            mac: String::new(),
+        };
+        let (d, _) = key(d, KeyCode::F(2), none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no add question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds { label: "add net1".into(), cmds: vec![ops::net_cmd(Kind::Qemu, 101, "net1", "virtio,bridge=vmbr1,tag=5")] }
+        );
+        let nets = vec![("net0".to_string(), "virtio=BC:24:11:00:00:01,bridge=vmbr0".to_string())];
+        let d = Dialog::Net {
+            t: target(Kind::Qemu),
+            nets: Some(nets),
+            sel: 0,
+            field: 0,
+            bridge: String::new(),
+            vlan: String::new(),
+            mac: String::new(),
+        };
+        let (d, _) = key(d, KeyCode::F(2), none);
+        assert!(matches!(d, Some(Dialog::Net { .. })), "an empty bridge must not ask");
+        let (d, _) = key(d.unwrap(), KeyCode::F(3), none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no remove question") };
+        assert_eq!(s.op, Op::Cmds { label: "remove net0".into(), cmds: vec![ops::net_del_cmd(Kind::Qemu, 101, "net0")] });
+        assert!(s.lines[0].1, "removing is red");
+
+        let disks = vec![("scsi0".to_string(), "local-lvm:vm-101-disk-0,size=32G".to_string())];
+        let keys = vec!["scsi0".to_string(), "scsi1".to_string()];
+        let d = Dialog::Resize { t: target(Kind::Qemu), disks: Some(disks), keys, sel: 0, gib: String::new() };
+        let (d, _) = key(d, KeyCode::F(2), none);
+        assert!(matches!(d, Some(Dialog::Resize { .. })), "no size yet");
+        let (d, _) = key(d.unwrap(), KeyCode::Char('8'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::F(2), none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no disk question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds {
+                label: "add scsi2 (8 GiB)".into(),
+                cmds: vec![ops::disk_add_cmd(Kind::Qemu, 101, &["scsi0".into(), "scsi1".into()], "local-lvm", 8).unwrap().2]
+            }
+        );
     }
 
     #[test]

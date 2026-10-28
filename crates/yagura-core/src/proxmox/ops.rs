@@ -1490,6 +1490,50 @@ pub fn disks(kind: Kind, cfg: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The first `<prefix>N` (N from 0 to `max`) that no configuration key uses.
+fn free_key(keys: &[String], prefix: &str, max: u32) -> Option<String> {
+    (0..=max).map(|n| format!("{prefix}{n}")).find(|k| !keys.contains(k))
+}
+
+/// A new network device: the first free `netN` and its value (a VM gets a virtio card, a container `ethN` with DHCP), and the command.
+/// `keys` are all keys of the guest's configuration; an empty `bridge` gives `None`.
+pub fn net_add_cmd(kind: Kind, id: u32, keys: &[String], bridge: &str, vlan: &str) -> Option<(String, String, Cmd)> {
+    if bridge.is_empty() {
+        return None;
+    }
+    let dev = free_key(keys, "net", if kind == Kind::Lxc { 9 } else { 31 })?;
+    let n = dev.trim_start_matches("net");
+    let mut value = if kind == Kind::Lxc { format!("name=eth{n},bridge={bridge},ip=dhcp") } else { format!("virtio,bridge={bridge}") };
+    if !vlan.is_empty() {
+        value.push_str(&format!(",tag={vlan}"));
+    }
+    let cmd = net_cmd(kind, id, &dev, &value);
+    Some((dev, value, cmd))
+}
+
+/// `qm set --delete netN` / `pct set --delete netN`.
+pub fn net_del_cmd(kind: Kind, id: u32, dev: &str) -> Cmd {
+    Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), "--delete", dev])
+}
+
+/// A new disk of `gib` GiB on `storage`: the first free `scsiN` (a VM) or `mpN` mounted at `/mnt/diskN` (a container), its value
+/// and the command. `keys` are all keys of the guest's configuration (so a CD-ROM or cloud-init drive is never replaced).
+pub fn disk_add_cmd(kind: Kind, id: u32, keys: &[String], storage: &str, gib: u32) -> Option<(String, String, Cmd)> {
+    if storage.is_empty() || storage.contains([',', ':', ' ']) || gib == 0 {
+        return None;
+    }
+    let (dev, value) = if kind == Kind::Lxc {
+        let dev = free_key(keys, "mp", 255)?;
+        let n = dev.trim_start_matches("mp");
+        let value = format!("{storage}:{gib},mp=/mnt/disk{n}");
+        (dev, value)
+    } else {
+        (free_key(keys, "scsi", 30)?, format!("{storage}:{gib}"))
+    };
+    let cmd = Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), &format!("--{dev}"), &value]);
+    Some((dev, value, cmd))
+}
+
 /// `qm resize` / `pct resize`: grow a disk by `gib` GiB (a disk cannot be shrunk this way).
 pub fn resize_cmd(kind: Kind, id: u32, disk: &str, gib: u32) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["resize", &id.to_string(), disk, &format!("+{gib}G")])
@@ -1779,6 +1823,31 @@ mod tests {
         ] {
             assert!(storage_add_cmd(k, &f(bad)).is_err(), "{k} {bad:?}");
         }
+    }
+
+    #[test]
+    fn a_nic_and_a_disk_are_added_in_the_first_free_slot() {
+        let keys = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (dev, v, c) = net_add_cmd(Kind::Qemu, 100, &keys(&["net0", "net2", "scsi0"]), "vmbr1", "7").unwrap();
+        assert_eq!((dev.as_str(), v.as_str()), ("net1", "virtio,bridge=vmbr1,tag=7"));
+        assert_eq!((c.prog.as_str(), c.args.last().unwrap().as_str()), ("qm", "virtio,bridge=vmbr1,tag=7"));
+        let (dev, v, _) = net_add_cmd(Kind::Lxc, 200, &keys(&["net0"]), "vmbr0", "").unwrap();
+        assert_eq!((dev.as_str(), v.as_str()), ("net1", "name=eth1,bridge=vmbr0,ip=dhcp"));
+        assert!(net_add_cmd(Kind::Qemu, 100, &[], "", "").is_none());
+        let full: Vec<String> = (0..=9).map(|n| format!("net{n}")).collect();
+        assert!(net_add_cmd(Kind::Lxc, 200, &full, "vmbr0", "").is_none());
+        let c = net_del_cmd(Kind::Qemu, 100, "net1");
+        assert_eq!(c.args, ["set", "100", "--delete", "net1"]);
+
+        // scsi1 is a cloud-init drive that is not in the disk list, but it is in the keys.
+        let (dev, v, c) = disk_add_cmd(Kind::Qemu, 100, &keys(&["scsi0", "scsi1"]), "local-lvm", 8).unwrap();
+        assert_eq!((dev.as_str(), v.as_str()), ("scsi2", "local-lvm:8"));
+        assert_eq!(c.args, ["set", "100", "--scsi2", "local-lvm:8"]);
+        let (dev, v, _) = disk_add_cmd(Kind::Lxc, 200, &keys(&["rootfs", "mp0"]), "tank", 4).unwrap();
+        assert_eq!((dev.as_str(), v.as_str()), ("mp1", "tank:4,mp=/mnt/disk1"));
+        assert!(disk_add_cmd(Kind::Qemu, 100, &[], "", 8).is_none());
+        assert!(disk_add_cmd(Kind::Qemu, 100, &[], "a,b", 8).is_none());
+        assert!(disk_add_cmd(Kind::Qemu, 100, &[], "local", 0).is_none());
     }
 
     #[test]

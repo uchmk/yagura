@@ -333,10 +333,11 @@ fn run(
                     };
                 }
                 Job::Config(id, l) => {
-                    if let Some(dialog::Dialog::Resize { t, disks, .. }) =
+                    if let Some(dialog::Dialog::Resize { t, disks, keys, .. }) =
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Resize { t, .. } if t.id == id))
                     {
                         *disks = Some(proxmox::ops::disks(t.kind, &l));
+                        *keys = l.iter().map(|(k, _)| k.clone()).collect();
                     }
                     if let Some(dialog::Dialog::Net { t, nets, bridge, vlan, mac, .. }) =
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Net { t, .. } if t.id == id))
@@ -806,7 +807,7 @@ fn open_config(app: &mut App, tx: &Sender<Job>) {
 fn open_resize(app: &mut App, tx: &Sender<Job>) {
     let Some(t) = target(app) else { return };
     app.status.clear();
-    app.dialog = Some(dialog::Dialog::Resize { t: t.clone(), disks: None, sel: 0, gib: String::new() });
+    app.dialog = Some(dialog::Dialog::Resize { t: t.clone(), disks: None, keys: vec![], sel: 0, gib: String::new() });
     read_config(t, tx);
 }
 
