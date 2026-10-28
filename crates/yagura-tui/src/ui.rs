@@ -11,21 +11,22 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::bar;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table, TableState};
-use yagura_core::proxmox::{Kind, Note, Status, apps};
+use yagura_core::proxmox::{Guest, Kind, Note, Status, apps};
 
 use crate::App;
-use crate::model::{DISK_FULL, Model, View, age, bytes, disk_pct};
+use crate::model::{DISK_FULL, Model, View, age, bytes, disk_pct, stale_limit, unix_now};
 use yagura_core::proxmox::rrd::Point;
 
 const RED: Style = Style::new().fg(Color::Red);
 const SELECTED: Style = Style::new().bg(Color::Blue).add_modifier(Modifier::BOLD);
 const DIM: Style = Style::new().fg(Color::DarkGray);
+const YELLOW: Style = Style::new().fg(Color::Yellow);
 
 pub fn draw(f: &mut Frame, app: &App) {
     // About a fifth of the height for graphs above the guests (the host's, or the entered guest's), when the screen is tall enough to spare it.
     let tall = f.area().height >= 30;
     let table = app.view == View::Guests;
-    let inside_h = if table { 7 } else { 0 };
+    let inside_h = if table { 8 } else { 0 };
     let strip_h = if tall && (table || matches!(app.view, View::Graph(_))) { (f.area().height / 5).clamp(6, 12) } else { 0 };
     let [head, strip_area, body, detail, foot] = Layout::vertical([
         Constraint::Length(3),
@@ -63,7 +64,9 @@ fn help(f: &mut Frame) {
         "  /          find a guest by name or id (Enter keep, Esc clear)",
         "  s          sort: id, cpu, mem, swap, problems (worst first)",
         "  Enter      open a guest: graphs and the processes inside it",
-        "  Esc        back from a guest",
+        "  Esc        back from a guest (in the list: clear the marks)",
+        "  Space      mark a guest; u o d r then act on all marked",
+        "  l          in a guest: switch processes / its log (j k scroll)",
         "  u          install the waiting updates in the guest (asks first)",
         "  o d r      start / shut down / reboot the guest (asks first)",
         "  q          quit",
@@ -71,18 +74,16 @@ fn help(f: &mut Frame) {
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
         "  UPD 3+1h   1 more package is held on purpose (apt-mark hold)",
-        "  red SWAP   swap is nearly full: the guest lacks memory",
-        "  red DISK   the root disk is 90% full: updates may fail",
+        "  red SWAP/DISK  swap is nearly full / the root disk is 90% full",
         "  red NEW    a newer version of the app exists (NEW column)",
-        "  gray row   the guest is stopped",
+        "  gray row   the guest is stopped;  + before ID  it is marked",
+        "  STATE !    a task failed in the last 24 h;  stale  not started for 7d",
         "",
         "The screen only reads. Nothing changes until you press y.",
-        "",
-        "PROBLEMS sort puts first: swap full, disk full (2 each),",
-        "  reboot wanted, updates waiting (1 each).",
+        "PROBLEMS sort puts first: swap full, disk full, failed task (2 each),",
+        "  reboot wanted, updates waiting, stale (1 each).",
         "",
         "Press any key to close.",
-        "",
     ];
     let area = f.area();
     let w = 70.min(area.width);
@@ -130,8 +131,25 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(format!("swap {}/{}", bytes(m.mem.swap_used), bytes(m.mem.swap_total)), if swap_red { RED } else { Style::new() }),
     ]);
     let nodes = m.cluster.nodes.iter().map(|n| format!("{} {}", n.name, if n.online { "online" } else { "offline" })).collect::<Vec<_>>();
-    let l3 = Line::styled(format!(" pve: {}", if nodes.is_empty() { note(m.cluster.note) } else { nodes.join(", ") }), DIM);
-    f.render_widget(Paragraph::new(vec![l1, l2, l3]), area);
+    let mut l3 = vec![Span::styled(format!(" pve: {}", if nodes.is_empty() { note(m.cluster.note) } else { nodes.join(", ") }), DIM)];
+    l3.extend(host_state(&m.cluster));
+    f.render_widget(Paragraph::new(vec![l1, l2, Line::from(l3)]), area);
+}
+
+/// What the host itself needs a look at: how full its storages are (red from 90%) and whether it wants a reboot.
+fn host_state(c: &yagura_core::proxmox::Cluster) -> Vec<Span<'static>> {
+    let mut out = vec![];
+    let used: Vec<_> = c.storage.iter().filter(|s| s.active).filter_map(|s| s.pct().map(|p| (s.name.clone(), p))).collect();
+    if !used.is_empty() {
+        out.push(Span::styled("  storage", DIM));
+        for (name, p) in used {
+            out.push(Span::styled(format!(" {name} {p:.0}%"), if p >= DISK_FULL { RED.add_modifier(Modifier::BOLD) } else { DIM }));
+        }
+    }
+    if c.reboot_required {
+        out.push(Span::styled("  reboot needed", RED.add_modifier(Modifier::BOLD)));
+    }
+    out
 }
 
 fn note(n: Option<Note>) -> String {
@@ -144,9 +162,50 @@ fn note(n: Option<Note>) -> String {
     }
 }
 
+/// The table's columns: header, width, and whether the width is a floor (the column takes the slack).
+const COLS: [(&str, u16, bool); 16] = [
+    ("ID", 6, false),
+    ("", 2, false),
+    ("NAME", 12, true),
+    ("STATE", 8, false),
+    ("CPU", 7, false),
+    ("MEM", 13, false),
+    ("DISK", 5, false),
+    ("SWAP", 11, false),
+    ("NET in/out /s", 16, false),
+    ("UP", 8, false),
+    ("APP", 11, false),
+    ("VER", 9, false),
+    ("NEW", 9, false),
+    ("OS", 16, false),
+    ("UPD", 5, false),
+    ("TAGS", 6, true),
+];
+
+/// Indexes into `COLS`, the first to go when the terminal is too narrow. The rest stay: ID, kind, NAME, STATE, CPU, MEM, DISK.
+const DROP: [usize; 9] = [15, 13, 12, 11, 10, 8, 9, 7, 14];
+
+/// Which columns fit in `width` cells (one blank between columns).
+pub fn visible_columns(width: u16) -> [bool; 16] {
+    let mut on = [true; 16];
+    let need = |on: &[bool; 16]| {
+        let n = on.iter().filter(|o| **o).count() as u16;
+        COLS.iter().zip(on).filter(|(_, o)| **o).map(|(c, _)| c.1).sum::<u16>() + n.saturating_sub(1)
+    };
+    for d in DROP {
+        if need(&on) <= width {
+            break;
+        }
+        on[d] = false;
+    }
+    on
+}
+
 fn guests(f: &mut Frame, app: &App, area: Rect) {
     let m = &app.model;
     let list = m.guests(app.sort);
+    let now = unix_now();
+    let on = visible_columns(area.width);
     let rows = list.iter().map(|g| {
         let rate = m.rates.get(&g.id).copied().unwrap_or_default();
         let (swap, swap_style) = match g.swap {
@@ -161,19 +220,24 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
         let (app_name, ver, new, new_style) = app_cells(m, g.id);
         let (state, state_style) = match g.status {
             Status::Running => ("running", Style::new().fg(Color::Green)),
+            Status::Stopped if m.stale_at(g, now).is_some() => ("stale", YELLOW),
             Status::Stopped => ("stopped", DIM),
             Status::Other => ("other", Style::new().fg(Color::Yellow)),
         };
+        let mut state = vec![Span::styled(state, state_style)];
+        if m.failed_at(g, now).is_some() {
+            state.push(Span::styled("!", RED.add_modifier(Modifier::BOLD)));
+        }
         let (disk, disk_style) = match disk_pct(g) {
             Some(p) => (format!("{p:3.0}%"), if p >= DISK_FULL { RED.add_modifier(Modifier::BOLD) } else { Style::new() }),
             None => (String::new(), DIM),
         };
         let base = if run { Style::new() } else { DIM };
-        Row::new([
-            Cell::from(g.id.to_string()),
+        let cells = [
+            Cell::from(if app.marks.contains(&g.id) { format!("+{}", g.id) } else { g.id.to_string() }),
             Cell::from(if g.kind == Kind::Lxc { "ct" } else { "vm" }),
             Cell::from(g.name.clone()),
-            Cell::from(state).style(state_style),
+            Cell::from(Line::from(state)),
             Cell::from(if run { pct(g.cpu * 100.0) } else { String::new() }),
             Cell::from(format!("{}/{}", bytes(g.mem), bytes(g.maxmem))),
             Cell::from(disk).style(disk_style),
@@ -186,46 +250,12 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
             Cell::from(os),
             Cell::from(upd).style(upd_style),
             Cell::from(g.tags.join(",")),
-        ])
-        .style(base)
+        ];
+        Row::new(cells.into_iter().zip(on).filter(|(_, o)| *o).map(|(c, _)| c)).style(base)
     });
-    let head = Row::new([
-        "ID",
-        "",
-        "NAME",
-        "STATE",
-        "CPU",
-        "MEM",
-        "DISK",
-        "SWAP",
-        "NET in/out /s",
-        "UP",
-        "APP",
-        "VER",
-        "NEW",
-        "OS",
-        "UPD",
-        "TAGS",
-    ])
-    .style(Style::new().add_modifier(Modifier::BOLD));
-    let widths = [
-        Constraint::Length(6),
-        Constraint::Length(2),
-        Constraint::Min(12),
-        Constraint::Length(8),
-        Constraint::Length(7),
-        Constraint::Length(13),
-        Constraint::Length(5),
-        Constraint::Length(11),
-        Constraint::Length(16),
-        Constraint::Length(8),
-        Constraint::Length(11),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(16),
-        Constraint::Length(5),
-        Constraint::Min(6),
-    ];
+    let head = Row::new(COLS.iter().zip(on).filter(|(_, o)| *o).map(|(c, _)| c.0)).style(Style::new().add_modifier(Modifier::BOLD));
+    let widths: Vec<Constraint> =
+        COLS.iter().zip(on).filter(|(_, o)| *o).map(|(c, _)| if c.2 { Constraint::Min(c.1) } else { Constraint::Length(c.1) }).collect();
     let (total, running, updates, reboot) = m.summary();
     let find = if app.filtering {
         format!("  find: {}_", m.filter)
@@ -234,8 +264,9 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
     } else {
         format!("  find: {}", m.filter)
     };
+    let marked = if app.marks.is_empty() { String::new() } else { format!(", {} marked", app.marks.len()) };
     let title = format!(
-        " guests: {total}, {running} running, {} stopped, {updates} with updates, {reboot} need reboot  (sort: {}){find} ",
+        " guests: {total}, {running} running, {} stopped, {updates} with updates, {reboot} need reboot{marked}  (sort: {}){find} ",
         total - running,
         app.sort.label()
     );
@@ -305,6 +336,9 @@ fn procs(f: &mut Frame, app: &App, area: Rect) {
 fn guest_procs(f: &mut Frame, app: &App, id: u32, area: Rect) {
     let m = &app.model;
     let name = m.cluster.guests.iter().find(|g| g.id == id).map_or(String::new(), |g| g.name.clone());
+    if app.log {
+        return guest_log(f, app, id, &name, area);
+    }
     let title = format!(" processes in {id} {name} ");
     let list = match m.guest_procs.get(&id) {
         None => {
@@ -334,13 +368,58 @@ fn guest_procs(f: &mut Frame, app: &App, id: u32, area: Rect) {
     f.render_stateful_widget(t, area, &mut st);
 }
 
-/// When a stopped guest last started, for the detail pane.
-fn last_run(at: Option<u64>) -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    match at {
-        Some(t) => format!("stopped; last started {} ago (task log)", age(now.saturating_sub(t))),
-        None => "stopped; no start in the task log".into(),
+/// The newest lines of the entered guest's journal; `j`/`k` scroll back from the newest.
+fn guest_log(f: &mut Frame, app: &App, id: u32, name: &str, area: Rect) {
+    let title = format!(" log of {id} {name}  (l processes, j/k scroll) ");
+    let block = Block::new().borders(Borders::TOP).title(title);
+    let lines = match app.model.guest_logs.get(&id) {
+        None => {
+            f.render_widget(Paragraph::new(Line::styled(" reading...", DIM)).block(block), area);
+            return;
+        }
+        Some(None) => {
+            let why = " no log (needs a running Linux guest; a VM needs the guest agent)";
+            f.render_widget(Paragraph::new(Line::styled(why, DIM)).block(block), area);
+            return;
+        }
+        Some(Some(l)) => l,
+    };
+    let h = area.height.saturating_sub(1) as usize;
+    let end = lines.len().saturating_sub(app.log_back.min(lines.len()));
+    let start = end.saturating_sub(h);
+    let shown: Vec<Line> =
+        lines[start..end].iter().map(|l| Line::raw(l.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>())).collect();
+    f.render_widget(Paragraph::new(shown).block(block), area);
+}
+
+/// What the task log says about a guest, for the detail pane: its latest starts and how long it ran, a stale
+/// warning, a failed task of the last day, and its snapshots.
+pub fn hist_lines(m: &Model, g: &Guest, now: u64) -> Vec<Line<'static>> {
+    let mut out = vec![];
+    let Some((h, _)) = m.hist.get(&g.id) else { return out };
+    let runs = h.runs(5);
+    if runs.is_empty() {
+        out.push(Line::styled("no start in the task log", DIM));
+    } else {
+        let list: Vec<String> = runs
+            .iter()
+            .map(|r| {
+                let ago = age(now.saturating_sub(r.start));
+                r.ran.map_or(format!("{ago} ago"), |d| format!("{ago} ago ran {}", age(d)))
+            })
+            .collect();
+        out.push(Line::raw(format!("starts: {}", list.join(", "))));
     }
+    if let Some(idle) = m.stale_at(g, now) {
+        out.push(Line::styled(format!("not started for {} (limit {}, YAGURA_STALE_DAYS)", age(idle), age(stale_limit())), YELLOW));
+    }
+    if let Some(t) = m.failed_at(g, now) {
+        out.push(Line::styled(format!("failed {} {} ago: {}", t.kind, age(now.saturating_sub(t.start)), t.status), RED));
+    }
+    if let Some(oldest) = h.oldest_snapshot() {
+        out.push(Line::raw(format!("snapshots: {}, oldest {} ago", h.snapshots.len(), age(now.saturating_sub(oldest)))));
+    }
+    out
 }
 
 /// The container under the cursor, as `pct exec` found it.
@@ -363,10 +442,11 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::styled("reboot required", RED));
         }
     } else if g.status == Status::Stopped {
-        lines.push(Line::styled(last_run(m.last_start.get(&g.id).copied().flatten()), DIM));
+        lines.push(Line::styled("stopped", DIM));
     } else {
         lines.push(Line::styled("Enter: look inside (pct exec / qm guest exec)", DIM));
     }
+    lines.extend(hist_lines(m, g, unix_now()));
     let title = format!(" {} {} ", g.id, g.name);
     f.render_widget(Paragraph::new(lines).block(Block::new().borders(Borders::TOP).title(title)), area);
 }
@@ -374,7 +454,16 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
 fn footer(f: &mut Frame, app: &App, area: Rect) {
     if let Some(a) = &app.confirm {
         let note = if a.note.is_empty() { String::new() } else { format!(" - {}", a.note) };
-        let q = format!(" {} {} {}{note} (y/n) ", a.power.verb(), a.id, a.name);
+        let q = if a.more.is_empty() {
+            format!(" {} {} {}{note} (y/n) ", a.power.verb(), a.id, a.name)
+        } else {
+            let mut names: Vec<String> =
+                std::iter::once(format!("{} {}", a.id, a.name)).chain(a.more.iter().map(|(i, n, _)| format!("{i} {n}"))).collect();
+            let extra = names.len().saturating_sub(4);
+            names.truncate(4);
+            let more = if extra > 0 { format!(" +{extra} more") } else { String::new() };
+            format!(" {} {} guests: {}{more}{note} (y/n) ", a.power.verb(), a.more.len() + 1, names.join(", "))
+        };
         f.render_widget(Paragraph::new(q).style(RED.add_modifier(Modifier::BOLD)), area);
         return;
     }
@@ -384,9 +473,11 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     }
     let keys = match app.view {
         View::Host => " Tab guests  ? help  q quit",
-        View::Guests => " Tab view  j/k move  / find  s sort  Enter graphs  u upgrade  o start  d shutdown  r reboot  ? help  q quit",
+        View::Guests => {
+            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  ? help  q quit"
+        }
         View::Procs => " Tab host  j/k move  ? help  q quit",
-        View::Graph(_) => " Esc back  j/k move  u upgrade  ? help  q quit",
+        View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  ? help  q quit",
     };
     let mut text = keys.to_string();
     if let Some((id, p, since)) = app.busy.first() {
@@ -616,6 +707,9 @@ mod tests {
             help: false,
             filtering: false,
             busy: vec![],
+            marks: Default::default(),
+            log: false,
+            log_back: 0,
         }
     }
 
@@ -646,6 +740,7 @@ mod tests {
             kind: Kind::Lxc,
             power: yagura_core::proxmox::Power::Reboot,
             note: String::new(),
+            more: vec![],
         });
         assert!(text(&render(&a)).contains("reboot 101 web (y/n)"));
     }
@@ -669,6 +764,7 @@ mod tests {
             kind: Kind::Lxc,
             power: yagura_core::proxmox::Power::Upgrade,
             note: "installs 5 updates, 1.2G free".into(),
+            more: vec![],
         });
         assert!(text(&render(&a)).contains("upgrade 101 web - installs 5 updates, 1.2G free (y/n)"));
     }
@@ -690,6 +786,7 @@ mod tests {
             kind: Kind::Lxc,
             power: yagura_core::proxmox::Power::Shutdown,
             note: "stops it; connected users are cut off".into(),
+            more: vec![],
         });
         let t = text(&render(&a));
         assert!(t.contains("connected users are cut off"));
@@ -806,6 +903,98 @@ mod tests {
         a.model.guest_procs.insert(101, Some(vec![p]));
         let s = text(&render(&a));
         assert!(s.contains("nginx") && s.contains("root"), "{s}");
+    }
+
+    #[test]
+    fn narrow_terminals_drop_columns_in_order() {
+        assert!(visible_columns(170).iter().all(|o| *o));
+        let w = visible_columns(120);
+        assert!(!w[15] && !w[13] && w[0] && w[2] && w[3] && w[6], "{w:?}");
+        let n = visible_columns(70);
+        assert!([0, 1, 2, 3, 4, 5, 6].iter().all(|i| n[*i]), "the core columns stay: {n:?}");
+        assert!(!n[8] && !n[15] && !n[10]);
+        // Never fewer than the core, however narrow.
+        assert_eq!(visible_columns(10).iter().filter(|o| **o).count(), 7);
+        for width in [30, 60, 90, 110, 130, 150] {
+            let mut t = Terminal::new(TestBackend::new(width, 29)).unwrap();
+            t.draw(|f| draw(f, &app(View::Guests))).unwrap();
+            let s = text(t.backend().buffer());
+            assert!(s.contains("STATE") || width < 40, "{width}");
+        }
+    }
+
+    #[test]
+    fn the_task_log_shows_starts_stale_failures_and_snapshots() {
+        use crate::model::stale_limit;
+        use yagura_core::proxmox::{History, Task};
+        let now = 10_000_000u64;
+        let t = |kind: &str, start: u64, end: Option<u64>, status: &str| Task { kind: kind.into(), start, end, status: status.into() };
+        let h = History {
+            tasks: vec![
+                t("vzstart", now - 20 * 86400, Some(now - 20 * 86400 + 5), "OK"),
+                t("vzshutdown", now - 20 * 86400 + 3600, Some(now - 20 * 86400 + 3700), "OK"),
+                t("vzsnapshot", now - 3600, Some(now - 3500), "snapshot failed"),
+            ],
+            snapshots: vec![now - 5 * 86400, now - 86400],
+        };
+        let mut a = app(View::Guests);
+        a.model.cluster.guests[0].status = Status::Stopped;
+        a.model.hist.insert(101, (h, std::time::Instant::now()));
+        let g = a.model.cluster.guests[0].clone();
+        let lines: Vec<String> = hist_lines(&a.model, &g, now).iter().map(|l| l.to_string()).collect();
+        let all = lines.join("\n");
+        assert!(all.contains("starts: 20d") && all.contains("ran 1h"), "{all}");
+        assert!(all.contains("not started for 20d") && all.contains(&format!("limit {}", age(stale_limit()))), "{all}");
+        assert!(all.contains("failed vzsnapshot 1h") && all.contains("snapshot failed"), "{all}");
+        assert!(all.contains("snapshots: 2, oldest 5d"), "{all}");
+        assert_eq!(a.model.problems_at(&g, now), 3);
+        // Before the log is read there is nothing to show.
+        a.model.hist.clear();
+        assert!(hist_lines(&a.model, &g, now).is_empty());
+    }
+
+    #[test]
+    fn marks_and_a_batch_question_are_drawn() {
+        let mut a = app(View::Guests);
+        a.marks.insert(101);
+        let s = text(&render(&a));
+        assert!(s.contains("+101") && s.contains("1 marked"), "{s}");
+        a.confirm = Some(crate::Ask {
+            id: 101,
+            name: "web".into(),
+            kind: Kind::Lxc,
+            power: yagura_core::proxmox::Power::Upgrade,
+            note: "installs the updates in 6 guests, one after another".into(),
+            more: (102..107).map(|i| (i, format!("c{i}"), Kind::Lxc)).collect(),
+        });
+        let s = text(&render(&a));
+        assert!(s.contains("upgrade 6 guests: 101 web, 102 c102, 103 c103, 104 c104 +2 more"), "{s}");
+    }
+
+    #[test]
+    fn the_host_header_shows_storage_and_a_wanted_reboot() {
+        use yagura_core::proxmox::Storage;
+        let mut a = app(View::Guests);
+        a.model.cluster.storage = vec![Storage { name: "local".into(), node: "pve".into(), used: 95, total: 100, active: true }];
+        a.model.cluster.reboot_required = true;
+        let b = render(&a);
+        let s = text(&b);
+        assert!(s.contains("storage local 95%") && s.contains("reboot needed"), "{s}");
+        assert!(b.content().iter().any(|c| c.symbol() == "9" && c.fg == Color::Red));
+    }
+
+    #[test]
+    fn the_guest_log_shows_the_newest_lines_and_scrolls_back() {
+        let mut a = app(View::Graph(101));
+        a.log = true;
+        a.model.guest_logs.insert(101, Some((0..100).map(|i| format!("line {i}\u{1b}[0m")).collect()));
+        let s = text(&render(&a));
+        assert!(s.contains("log of 101 web") && s.contains("line 99") && !s.contains("line 0 "), "{s}");
+        a.log_back = 50;
+        let s = text(&render(&a));
+        assert!(s.contains("line 49") && !s.contains("line 99"), "{s}");
+        a.model.guest_logs.insert(101, None);
+        assert!(text(&render(&a)).contains("no log"));
     }
 
     #[test]

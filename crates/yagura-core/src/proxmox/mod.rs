@@ -91,6 +91,71 @@ pub struct Cluster {
     pub nodes: Vec<Node>,
     pub guests: Vec<Guest>,
     pub note: Option<Note>,
+    /// The storages the cluster lists (`local`, `local-lvm`, a mount…), with how full each is.
+    pub storage: Vec<Storage>,
+    /// This host runs an older kernel than the newest one installed, or says it wants a reboot.
+    pub reboot_required: bool,
+}
+
+/// One storage of a node, from the same listing as the guests.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Storage {
+    pub name: String,
+    pub node: String,
+    pub used: u64,
+    pub total: u64,
+    pub active: bool,
+}
+
+impl Storage {
+    /// Percent used; `None` when it has no size (not mounted).
+    pub fn pct(&self) -> Option<f64> {
+        (self.active && self.total > 0).then(|| self.used as f64 * 100.0 / self.total as f64)
+    }
+}
+
+/// The storages in a `/cluster/resources` listing.
+pub fn parse_storage(json: &str) -> Vec<Storage> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let u = |r: &Value, k: &str| r.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let s = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    v.as_array()
+        .map(|l| {
+            l.iter()
+                .filter(|r| r.get("type").and_then(Value::as_str) == Some("storage"))
+                .map(|r| Storage {
+                    name: s(r, "storage"),
+                    node: s(r, "node"),
+                    used: u(r, "disk"),
+                    total: u(r, "maxdisk"),
+                    active: r.get("status").and_then(Value::as_str) == Some("available"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Kernel versions as numbers, so `6.8.12-10-pve` is newer than `6.8.12-4-pve`.
+fn kernel_key(v: &str) -> Vec<u64> {
+    v.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect()
+}
+
+/// Whether one of the installed kernels is newer than the running one (same flavour, such as `-pve`).
+pub fn kernel_stale(running: &str, installed: &[String]) -> bool {
+    let flavour = |v: &str| v.rsplit('-').next().filter(|f| f.chars().all(|c| c.is_ascii_alphabetic())).unwrap_or("").to_string();
+    let (run, f) = (kernel_key(running), flavour(running));
+    installed.iter().any(|i| flavour(i) == f && kernel_key(i) > run)
+}
+
+/// This host wants a reboot: `/run/reboot-required`, or a newer kernel in `/lib/modules` than the running one.
+fn host_reboot_required() -> bool {
+    if Path::new("/run/reboot-required").exists() {
+        return true;
+    }
+    let Ok(running) = std::fs::read_to_string("/proc/sys/kernel/osrelease") else { return false };
+    let installed: Vec<String> =
+        std::fs::read_dir("/lib/modules").map(|d| d.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect()).unwrap_or_default();
+    kernel_stale(running.trim(), &installed)
 }
 
 /// Why there is nothing to show.
@@ -217,7 +282,8 @@ pub fn read() -> Cluster {
             Kind::Qemu => vm_swap(Path::new("/run/qemu-server"), Path::new("/proc"), g.id),
         };
     }
-    Cluster { nodes, guests, note: None }
+    let storage = parse_storage(&String::from_utf8_lossy(&out.stdout));
+    Cluster { nodes, guests, note: None, storage, reboot_required: host_reboot_required() }
 }
 
 /// What is inside a guest: a container read with `pct exec`, a VM through its
@@ -365,25 +431,116 @@ pub fn power(kind: Kind, id: u32, p: Power) -> Result<(), String> {
     Err(err.lines().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim().to_string())
 }
 
-/// When the guest was last started successfully (Unix seconds), from the node's task log. This is how a guest
-/// that is stopped after its weekly job (a backup container) shows when it last ran, though Proxmox lists no
-/// backup for it. Runs `pvesh`: call it from a thread of its own. `None` when the log no longer has one.
-pub fn last_start(node: &str, id: u32) -> Option<u64> {
-    let o = Command::new("pvesh")
-        .args(["get", &format!("/nodes/{node}/tasks"), "--vmid", &id.to_string(), "--limit", "50", "--output-format", "json"])
-        .output()
-        .ok()?;
-    o.status.success().then(|| parse_last_start(&String::from_utf8_lossy(&o.stdout))).flatten()
+/// One task from a node's task log.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Task {
+    /// `vzstart`, `qmstart`, `vzshutdown`, `vzsnapshot`…
+    pub kind: String,
+    pub start: u64,
+    /// `None` while it runs.
+    pub end: Option<u64>,
+    /// `OK`, or what went wrong; empty while it runs.
+    pub status: String,
 }
 
-/// The newest successful start in a task list (`vzstart` / `qmstart`).
-pub fn parse_last_start(json: &str) -> Option<u64> {
-    let v: Value = serde_json::from_str(json).ok()?;
-    v.as_array()?
-        .iter()
-        .filter(|t| matches!(t["type"].as_str(), Some("vzstart" | "qmstart")) && t["status"].as_str() == Some("OK"))
-        .filter_map(|t| t["starttime"].as_u64())
-        .max()
+impl Task {
+    pub fn failed(&self) -> bool {
+        self.end.is_some() && !self.status.is_empty() && self.status != "OK" && !self.status.starts_with("WARNINGS")
+    }
+}
+
+/// One start of a guest and how long it ran before it was shut down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Run {
+    pub start: u64,
+    pub ran: Option<u64>,
+}
+
+/// The guest's task log (oldest first) and its snapshots' times: what shows when it last ran, what failed, what piles up.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct History {
+    pub tasks: Vec<Task>,
+    pub snapshots: Vec<u64>,
+}
+
+impl History {
+    /// The newest successful starts, newest first, each with how long the guest stayed up (to the next shutdown or stop).
+    pub fn runs(&self, n: usize) -> Vec<Run> {
+        let stops = |t: &Task| matches!(t.kind.as_str(), "vzshutdown" | "vzstop" | "qmshutdown" | "qmstop") && t.status == "OK";
+        self.tasks
+            .iter()
+            .rev()
+            .filter(|t| matches!(t.kind.as_str(), "vzstart" | "qmstart") && t.status == "OK")
+            .take(n)
+            .map(|t| Run {
+                start: t.start,
+                ran: self.tasks.iter().find(|s| stops(s) && s.start >= t.start).map(|s| s.end.unwrap_or(s.start).saturating_sub(t.start)),
+            })
+            .collect()
+    }
+
+    pub fn last_start(&self) -> Option<u64> {
+        self.runs(1).first().map(|r| r.start)
+    }
+
+    /// The newest task that failed at or after `since` (Unix seconds).
+    pub fn failure_since(&self, since: u64) -> Option<&Task> {
+        self.tasks.iter().rev().find(|t| t.failed() && t.end.unwrap_or(t.start) >= since)
+    }
+
+    pub fn oldest_snapshot(&self) -> Option<u64> {
+        self.snapshots.iter().copied().min()
+    }
+}
+
+/// A node's task list into tasks, oldest first.
+pub fn parse_tasks(json: &str) -> Vec<Task> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let mut t: Vec<Task> = v
+        .as_array()
+        .map(|l| {
+            l.iter()
+                .filter_map(|t| {
+                    Some(Task {
+                        kind: t["type"].as_str()?.to_string(),
+                        start: t["starttime"].as_u64()?,
+                        end: t["endtime"].as_u64(),
+                        status: t["status"].as_str().unwrap_or("").to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    t.sort_by_key(|t| t.start);
+    t
+}
+
+/// The snapshots' times in a snapshot list (the `current` entry has none).
+pub fn parse_snapshots(json: &str) -> Vec<u64> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    v.as_array().map(|l| l.iter().filter_map(|s| s["snaptime"].as_u64()).collect()).unwrap_or_default()
+}
+
+fn pvesh(path: &str, extra: &[&str]) -> Option<String> {
+    let o = Command::new("pvesh").args(["get", path]).args(extra).args(["--output-format", "json"]).output().ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// The task log and snapshots of a guest (read-only `pvesh`). This is how a guest that is stopped after its weekly job
+/// (a backup container) shows when it last ran, though Proxmox lists no backup for it. Slow: call it from a thread of its own.
+pub fn history(node: &str, kind: Kind, id: u32) -> History {
+    let tasks = pvesh(&format!("/nodes/{node}/tasks"), &["--vmid", &id.to_string(), "--limit", "50"]).map(|j| parse_tasks(&j));
+    let what = if kind == Kind::Lxc { "lxc" } else { "qemu" };
+    let snapshots = pvesh(&format!("/nodes/{node}/{what}/{id}/snapshot"), &[]).map(|j| parse_snapshots(&j));
+    History { tasks: tasks.unwrap_or_default(), snapshots: snapshots.unwrap_or_default() }
+}
+
+/// The last lines of a running guest's journal (or syslog); `None` when it can not be asked. Slow: call it from a thread of its own.
+pub fn logs(kind: Kind, id: u32) -> Option<Vec<String>> {
+    let script = "journalctl -n 200 --no-pager -o short 2>/dev/null || tail -n 200 /var/log/syslog /var/log/messages 2>/dev/null";
+    let out = exec(kind, id, &["sh", "-c", script])?;
+    let v: Vec<String> = out.lines().map(str::to_string).collect();
+    (!v.is_empty()).then_some(v)
 }
 
 /// `apt-get update` and `apt-get upgrade` inside a guest, without questions, and wait for them (call it from a
@@ -465,17 +622,35 @@ mod tests {
     ]"#;
 
     #[test]
-    fn the_last_start_is_the_newest_successful_one() {
+    fn the_task_log_gives_runs_failures_and_snapshots() {
         let json = r#"[
-            {"type":"vzstart","status":"OK","starttime":300},
-            {"type":"vzstart","status":"OK","starttime":200},
-            {"type":"vzstart","status":"command failed","starttime":400},
-            {"type":"vzshutdown","status":"OK","starttime":500},
-            {"type":"qmstart","status":"OK","starttime":250}
+            {"type":"vzstart","status":"OK","starttime":300,"endtime":301},
+            {"type":"vzshutdown","status":"OK","starttime":4000,"endtime":4010},
+            {"type":"vzstart","status":"OK","starttime":200,"endtime":201},
+            {"type":"vzshutdown","status":"OK","starttime":1000,"endtime":1010},
+            {"type":"vzstart","status":"command failed","starttime":400,"endtime":401},
+            {"type":"vzsnapshot","status":"WARNINGS: 1","starttime":500,"endtime":501},
+            {"type":"vzstart","starttime":9000}
         ]"#;
-        assert_eq!(parse_last_start(json), Some(300));
-        assert_eq!(parse_last_start("[]"), None);
-        assert_eq!(parse_last_start("not json"), None);
+        let snaps = r#"[{"name":"a","snaptime":50},{"name":"current"},{"name":"b","snaptime":90}]"#;
+        let h = History { tasks: parse_tasks(json), snapshots: parse_snapshots(snaps) };
+        assert_eq!(h.runs(5), [Run { start: 300, ran: Some(710) }, Run { start: 200, ran: Some(810) }]);
+        assert_eq!(h.last_start(), Some(300));
+        assert_eq!(h.failure_since(0).map(|t| t.start), Some(400));
+        assert!(h.failure_since(402).is_none());
+        assert_eq!(h.oldest_snapshot(), Some(50));
+        assert!(History::default().last_start().is_none() && parse_tasks("nope").is_empty());
+    }
+
+    #[test]
+    fn storage_and_kernel_age_are_read() {
+        let j = r#"[{"type":"storage","storage":"local","node":"pve","disk":50,"maxdisk":100,"status":"available"},
+                    {"type":"storage","storage":"usb","node":"pve","disk":0,"maxdisk":0,"status":"unknown"},{"type":"node"}]"#;
+        let s = parse_storage(j);
+        assert_eq!((s.len(), s[0].pct(), s[1].pct()), (2, Some(50.0), None));
+        let k = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(kernel_stale("6.8.12-4-pve", &k(&["6.8.12-4-pve", "6.8.12-10-pve"])));
+        assert!(!kernel_stale("6.8.12-10-pve", &k(&["6.8.12-4-pve", "6.8.12-10-pve", "6.9.0-generic"])));
     }
 
     #[test]

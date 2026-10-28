@@ -528,7 +528,7 @@ beside `yagura.exe`.
 `yagura-tui` (in `crates/yagura-tui`, built with the workspace) puts the host and its Proxmox VE guests on one screen: the host's
 cpu / memory / swap, and every guest from `pvesh` with its cpu, memory, swap (from the cgroup, red near the limit), network rate and
 uptime. `Tab` switches to the host's processes, `s` sorts, `Enter` looks inside a running container with `pct exec` (OS, packages,
-upgradable count, reboot required; `apt update` is never run). Run it as root on the host. It is not part of the release downloads yet.
+upgradable count, reboot required; `apt update` is never run). `Space` marks guests so `u` `o` `d` `r` act on all of them, `l` inside a guest shows its journal, the detail pane reads the task log and snapshots (last starts, stale after `YAGURA_STALE_DAYS`, failed tasks), and the header shows storage use and a wanted reboot. Run it as root on the host. It is not part of the release downloads yet.
 
 ```sh
 cargo run --release -p yagura-tui

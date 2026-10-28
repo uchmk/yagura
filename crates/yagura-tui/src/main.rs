@@ -6,15 +6,16 @@
 mod model;
 mod ui;
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use yagura_core::Msg;
 use yagura_core::proxmox::rrd::Point;
-use yagura_core::proxmox::{self, Cluster, Inside, Power, Status};
+use yagura_core::proxmox::{self, Cluster, History, Inside, Power, Status};
 
-use model::{Model, Sort, View, bytes};
+use model::{HIST_EVERY, Model, Sort, View, bytes};
 
 const PVE_EVERY: Duration = Duration::from_secs(5);
 /// How often the graphs on screen are read again (the history has a point a minute).
@@ -47,6 +48,11 @@ pub struct App {
     pub filtering: bool,
     /// Power changes running now, with when they began.
     pub busy: Vec<(u32, Power, Instant)>,
+    /// Guests marked with Space; the power keys act on all of them.
+    pub marks: HashSet<u32>,
+    /// The entered guest shows its log instead of its processes, and how many lines back from the newest it is scrolled.
+    pub log: bool,
+    pub log_back: usize,
 }
 
 /// What the user asked of a guest, shown until they answer.
@@ -58,6 +64,8 @@ pub struct Ask {
     pub power: Power,
     /// What it will do, in a few words (shown with the question).
     pub note: String,
+    /// More guests asked with the first one (id, name, kind), when several were marked.
+    pub more: Vec<(u32, String, proxmox::Kind)>,
 }
 
 enum Job {
@@ -68,8 +76,9 @@ enum Job {
     HostRrd(Vec<Point>),
     GuestRrd(u32, Vec<Point>),
     GuestProcs(u32, Option<Vec<proxmox::GuestProc>>),
-    /// A stopped guest's last successful start from the task log (Unix seconds).
-    LastStart(u32, Option<u64>),
+    /// A guest's task log and snapshots.
+    History(u32, History),
+    GuestLogs(u32, Option<Vec<String>>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -79,7 +88,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view  j/k move  / find  s sort  Enter graphs  Esc back  u upgrade  o start  d shutdown  r reboot  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  l logs  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -103,6 +112,9 @@ fn main() -> std::io::Result<()> {
         help: false,
         filtering: false,
         busy: vec![],
+        marks: HashSet::new(),
+        log: false,
+        log_back: 0,
     };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
@@ -150,8 +162,13 @@ fn run(
                     }
                     app.model.inside.insert(id, i);
                 }
-                Job::LastStart(id, t) => {
-                    app.model.last_start.insert(id, t);
+                Job::History(id, h) => {
+                    app.model.hist_looking.retain(|x| *x != id);
+                    app.model.hist.insert(id, (h, Instant::now()));
+                }
+                Job::GuestLogs(id, l) => {
+                    app.procs_busy = false;
+                    app.model.guest_logs.insert(id, l);
                 }
                 Job::Latest(key, tag) => {
                     app.model.latest.insert(key, tag);
@@ -170,6 +187,10 @@ fn run(
                 }
                 Job::Power(id, p, r) => {
                     app.busy.retain(|b| b.0 != id);
+                    // Read its task log again soon: the change just made is in it.
+                    if let Some(e) = app.model.hist.get_mut(&id) {
+                        e.1 = e.1.checked_sub(HIST_EVERY).unwrap_or(e.1);
+                    }
                     if r.is_ok()
                         && matches!(p, Power::Upgrade)
                         && let Some(g) = app.model.cluster.guests.iter().find(|g| g.id == id)
@@ -185,11 +206,12 @@ fn run(
             }
         }
         prefetch(app, jobs_tx);
-        prefetch_starts(app, jobs_tx);
+        prefetch_hist(app, jobs_tx);
         refresh_rrd(app, jobs_tx);
         refresh_procs(app, jobs_tx);
         let rows = match app.view {
             View::Guests => app.model.guests(app.sort).len(),
+            View::Graph(id) if app.log => app.model.guest_logs.get(&id).and_then(|l| l.as_ref()).map_or(0, Vec::len),
             View::Graph(id) => app.model.guest_procs.get(&id).and_then(|p| p.as_ref()).map_or(0, Vec::len),
             View::Procs => app.model.procs.len(),
             View::Host => 0,
@@ -229,7 +251,32 @@ fn run(
             KeyCode::Char('d') if app.view == View::Guests => ask(app, Power::Shutdown),
             KeyCode::Char('r') if app.view == View::Guests => ask(app, Power::Reboot),
             KeyCode::Char('u') if matches!(app.view, View::Guests | View::Graph(_)) => ask(app, Power::Upgrade),
+            KeyCode::Char(' ') if app.view == View::Guests => {
+                if let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id)
+                    && !app.marks.remove(&id)
+                {
+                    app.marks.insert(id);
+                }
+                app.selected = (app.selected + 1).min(rows.saturating_sub(1));
+            }
+            KeyCode::Esc if app.view == View::Guests => app.marks.clear(),
+            KeyCode::Char('l') if matches!(app.view, View::Graph(_)) => {
+                app.log = !app.log;
+                app.log_back = 0;
+                app.procs_at = None;
+                app.procs_busy = false;
+            }
+            KeyCode::Char('j') | KeyCode::Down if app.log && matches!(app.view, View::Graph(_)) => {
+                app.log_back = app.log_back.saturating_sub(1)
+            }
+            KeyCode::Char('k') | KeyCode::Up if app.log && matches!(app.view, View::Graph(_)) => {
+                app.log_back = (app.log_back + 1).min(rows)
+            }
+            KeyCode::Char('g') | KeyCode::Home if app.log && matches!(app.view, View::Graph(_)) => app.log_back = rows,
+            KeyCode::Char('G') | KeyCode::End if app.log && matches!(app.view, View::Graph(_)) => app.log_back = 0,
             KeyCode::Esc if matches!(app.view, View::Graph(_)) => {
+                app.log = false;
+                app.log_back = 0;
                 app.view = View::Guests;
                 app.selected = app.guest_sel;
                 app.rrd_at = None;
@@ -260,8 +307,27 @@ fn run(
     }
 }
 
-/// Ask for a power change of the selected guest; nothing runs until `y`.
+/// Ask for a power change of the selected guest, or of every marked one in the guest list; nothing runs until `y`.
 fn ask(app: &mut App, power: Power) {
+    if app.view == View::Guests && !app.marks.is_empty() {
+        let marked: Vec<_> = app.model.cluster.guests.iter().filter(|g| app.marks.contains(&g.id)).collect();
+        let fit: Vec<(u32, String, proxmox::Kind)> =
+            marked.iter().filter(|g| !g.template && power.fits(g.status)).map(|g| (g.id, g.name.clone(), g.kind)).collect();
+        let skipped = marked.len() - fit.len();
+        let n = fit.len();
+        let mut fit = fit.into_iter();
+        let Some((id, name, kind)) = fit.next() else {
+            app.status = format!("none of the {} marked guests can {} in this state", marked.len(), power.verb());
+            return;
+        };
+        let mut note = impact_many(power, n);
+        if skipped > 0 {
+            note = format!("{note}; {skipped} skipped (wrong state)");
+        }
+        app.status.clear();
+        app.confirm = Some(Ask { id, name, kind, power, note, more: fit.collect() });
+        return;
+    }
     let guests = app.model.guests(app.sort);
     let at = match app.view {
         View::Graph(id) => guests.iter().position(|g| g.id == id),
@@ -277,7 +343,17 @@ fn ask(app: &mut App, power: Power) {
     }
     app.status.clear();
     let note = impact(&app.model, id, power);
-    app.confirm = Some(Ask { id, name, kind, power, note });
+    app.confirm = Some(Ask { id, name, kind, power, note, more: vec![] });
+}
+
+/// What a power change of several guests does, for the question.
+fn impact_many(power: Power, n: usize) -> String {
+    match power {
+        Power::Start => format!("starts {n} guests"),
+        Power::Shutdown => format!("stops {n} guests; connected users are cut off"),
+        Power::Reboot => format!("restarts {n} guests; connected users are cut off"),
+        Power::Upgrade => format!("installs the updates in {n} guests, one after another"),
+    }
 }
 
 /// What a power change does, for the question: who is cut off, or how many
@@ -311,12 +387,23 @@ fn answer(app: &mut App, key: KeyCode, tx: &Sender<Job>) {
         return;
     }
     app.status.clear();
-    app.busy.push((a.id, a.power, Instant::now()));
+    let mut targets = vec![(a.id, a.kind)];
+    targets.extend(a.more.iter().map(|(id, _, kind)| (*id, *kind)));
+    let power = a.power;
+    for (id, _) in &targets {
+        app.busy.push((*id, power, Instant::now()));
+    }
+    app.marks.clear();
     let tx = tx.clone();
+    // One thread goes through them one after another: an upgrade of ten containers at once would hammer the disks.
     std::thread::Builder::new()
         .name("yagura-power".into())
         .spawn(move || {
-            let _ = tx.send(Job::Power(a.id, a.power, proxmox::power(a.kind, a.id, a.power)));
+            for (id, kind) in targets {
+                if tx.send(Job::Power(id, power, proxmox::power(kind, id, power))).is_err() {
+                    return;
+                }
+            }
         })
         .expect("spawn the power thread");
 }
@@ -328,6 +415,9 @@ fn open_graphs(app: &mut App) {
     app.guest_sel = app.selected;
     app.selected = 0;
     app.model.guest_procs.remove(&id);
+    app.model.guest_logs.remove(&id);
+    app.log = false;
+    app.log_back = 0;
     app.procs_at = None;
     app.view = View::Graph(id);
     app.rrd_at = None;
@@ -385,26 +475,28 @@ fn prefetch(app: &mut App, tx: &Sender<Job>) {
     }
 }
 
-/// Read the last start of every stopped guest once, and again when it is seen
-/// running (so a job that wakes a guest weekly and stops it shows its last run).
-fn prefetch_starts(app: &mut App, tx: &Sender<Job>) {
+/// Read every guest's task log and snapshots, a few at a time, and again every few minutes (so a job that wakes a
+/// guest weekly and stops it shows its last run, and a failed task shows soon).
+fn prefetch_hist(app: &mut App, tx: &Sender<Job>) {
     let m = &mut app.model;
-    let todo: Vec<(u32, String)> = m
+    let todo: Vec<(u32, String, proxmox::Kind)> = m
         .cluster
         .guests
         .iter()
-        .filter(|g| g.status == Status::Stopped && !g.template && !m.last_start.contains_key(&g.id))
-        .map(|g| (g.id, g.node.clone()))
+        .filter(|g| !g.template && !m.hist_looking.contains(&g.id))
+        .filter(|g| m.hist.get(&g.id).is_none_or(|(_, at)| at.elapsed() >= HIST_EVERY))
+        .map(|g| (g.id, g.node.clone(), g.kind))
+        .take(PARALLEL.saturating_sub(m.hist_looking.len()))
         .collect();
-    for (id, node) in todo {
-        m.last_start.insert(id, None);
+    for (id, node, kind) in todo {
+        m.hist_looking.push(id);
         let tx = tx.clone();
         std::thread::Builder::new()
-            .name("yagura-starts".into())
+            .name("yagura-hist".into())
             .spawn(move || {
-                let _ = tx.send(Job::LastStart(id, proxmox::last_start(&node, id)));
+                let _ = tx.send(Job::History(id, proxmox::history(&node, kind, id)));
             })
-            .expect("spawn the starts thread");
+            .expect("spawn the history thread");
     }
 }
 
@@ -463,10 +555,12 @@ fn refresh_procs(app: &mut App, tx: &Sender<Job>) {
     }
     let Some(kind) = app.model.cluster.guests.iter().find(|g| g.id == id).map(|g| g.kind) else { return };
     let tx = tx.clone();
+    let log = app.log;
     std::thread::Builder::new()
         .name("yagura-ps".into())
         .spawn(move || {
-            let _ = tx.send(Job::GuestProcs(id, proxmox::processes(kind, id)));
+            let _ =
+                tx.send(if log { Job::GuestLogs(id, proxmox::logs(kind, id)) } else { Job::GuestProcs(id, proxmox::processes(kind, id)) });
         })
         .expect("spawn the ps thread");
     app.procs_busy = true;

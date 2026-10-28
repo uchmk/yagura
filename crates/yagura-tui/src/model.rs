@@ -2,10 +2,11 @@
 //! the tests need none.
 
 use std::collections::{HashMap, VecDeque};
-use std::time::Instant;
+use std::sync::OnceLock;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use yagura_core::proxmox::rrd::Point;
-use yagura_core::proxmox::{Cluster, Guest, Inside, apps};
+use yagura_core::proxmox::{Cluster, Guest, History, Inside, Status, Task, apps};
 use yagura_core::{Mem, Proc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +54,26 @@ impl Sort {
 /// The root disk is called full from here (percent).
 pub const DISK_FULL: f64 = 90.0;
 
+/// A stopped guest that was not started for this many days is called stale (`YAGURA_STALE_DAYS` changes it).
+pub const STALE_DAYS: u64 = 7;
+
+/// A failed task counts as a problem for this long (seconds).
+pub const FAILED_WINDOW: u64 = 24 * 3600;
+
+/// The stale limit in seconds.
+pub fn stale_limit() -> u64 {
+    static LIMIT: OnceLock<u64> = OnceLock::new();
+    *LIMIT.get_or_init(|| std::env::var("YAGURA_STALE_DAYS").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(STALE_DAYS) * 86400)
+}
+
+/// Now, in Unix seconds.
+pub fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// How long a guest's task log is trusted before it is read again.
+pub const HIST_EVERY: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Bytes per second of the two directions of a guest's network.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rate {
@@ -84,8 +105,12 @@ pub struct Model {
     pub guest_rrd: HashMap<u32, Vec<Point>>,
     /// What runs inside the guest being looked at; `None` when it can not be asked.
     pub guest_procs: HashMap<u32, Option<Vec<yagura_core::proxmox::GuestProc>>>,
-    /// When each stopped guest last started successfully (Unix seconds); `None` once asked and not found.
-    pub last_start: HashMap<u32, Option<u64>>,
+    /// Each guest's task log and snapshots, and when they were read.
+    pub hist: HashMap<u32, (History, Instant)>,
+    /// Guests whose task log is being read now.
+    pub hist_looking: Vec<u32>,
+    /// The last lines of the journal of the entered guest; `None` when it can not be asked.
+    pub guest_logs: HashMap<u32, Option<Vec<String>>>,
     /// Only the guests whose name or id contains this (case-blind); empty shows all.
     pub filter: String,
     last: HashMap<u32, (u64, u64, Instant)>,
@@ -135,23 +160,46 @@ impl Model {
         v
     }
 
-    /// How much a running guest wants attention: a full swap or disk counts
-    /// double, a wanted reboot or waiting updates once. Stopped guests are 0.
+    /// How much a guest wants attention: a full swap or disk counts double, a wanted reboot or waiting updates once
+    /// (running guests); a stale stopped guest counts once, a task that failed in the last day twice. Templates are 0.
     pub fn problems(&self, g: &Guest) -> u32 {
-        if g.status != yagura_core::proxmox::Status::Running || g.template {
+        self.problems_at(g, unix_now())
+    }
+
+    pub fn problems_at(&self, g: &Guest, now: u64) -> u32 {
+        if g.template {
             return 0;
         }
         let mut n = 0;
-        if g.swap.is_some_and(|s| s.near_limit()) {
-            n += 2;
+        if g.status == Status::Running {
+            if g.swap.is_some_and(|s| s.near_limit()) {
+                n += 2;
+            }
+            if disk_pct(g).is_some_and(|p| p >= DISK_FULL) {
+                n += 2;
+            }
+            if let Some(i) = self.inside.get(&g.id) {
+                n += u32::from(i.reboot_required) + u32::from(i.upgradable.unwrap_or(0) > 0);
+            }
         }
-        if disk_pct(g).is_some_and(|p| p >= DISK_FULL) {
-            n += 2;
+        n + u32::from(self.stale_at(g, now).is_some()) + 2 * u32::from(self.failed_at(g, now).is_some())
+    }
+
+    /// How long a stopped guest has gone without a start, when that is over the limit and the task log knows a start.
+    pub fn stale_at(&self, g: &Guest, now: u64) -> Option<u64> {
+        if g.template || g.status != Status::Stopped {
+            return None;
         }
-        if let Some(i) = self.inside.get(&g.id) {
-            n += u32::from(i.reboot_required) + u32::from(i.upgradable.unwrap_or(0) > 0);
+        let idle = now.saturating_sub(self.hist.get(&g.id)?.0.last_start()?);
+        (idle >= stale_limit()).then_some(idle)
+    }
+
+    /// The task that failed in the last day, if any.
+    pub fn failed_at(&self, g: &Guest, now: u64) -> Option<&Task> {
+        if g.template {
+            return None;
         }
-        n
+        self.hist.get(&g.id)?.0.failure_since(now.saturating_sub(FAILED_WINDOW))
     }
 
     /// `(guests, running, with updates waiting, wanting a reboot)` over the guests on show, templates left out.
@@ -274,6 +322,24 @@ mod tests {
         assert_eq!(m.summary(), (1, 1, 1, 1));
         m.filter = "2".into();
         assert_eq!(ids(&m), [2]);
+    }
+
+    #[test]
+    fn a_stale_stopped_guest_and_a_failed_task_count_as_problems() {
+        use yagura_core::proxmox::Task;
+        let mut m = Model::default();
+        let g = Guest { id: 5, status: Status::Stopped, ..Guest::default() };
+        let t = |kind: &str, start, status: &str| Task { kind: kind.into(), start, end: Some(start + 1), status: status.into() };
+        let now = 100 * 86400;
+        assert_eq!(m.problems_at(&g, now), 0);
+        let h = History { tasks: vec![t("vzstart", now - 30 * 86400, "OK")], snapshots: vec![] };
+        m.hist.insert(5, (h, Instant::now()));
+        assert_eq!((m.problems_at(&g, now), m.stale_at(&g, now)), (1, Some(30 * 86400)));
+        let h = History { tasks: vec![t("vzstart", now - 86400, "OK"), t("vzstart", now - 100, "boom")], snapshots: vec![] };
+        m.hist.insert(5, (h, Instant::now()));
+        assert_eq!((m.problems_at(&g, now), m.stale_at(&g, now).is_some()), (2, false));
+        let tpl = Guest { template: true, ..g.clone() };
+        assert_eq!(m.problems_at(&tpl, now), 0);
     }
 
     #[test]

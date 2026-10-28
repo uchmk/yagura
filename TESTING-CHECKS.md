@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-243 rows to press (243 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+249 rows to press (249 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -260,6 +260,12 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.9** `/` then a few letters narrows the guests by name or id (Enter keeps, Esc clears); `s` cycles to `problems`, which puts guests with a full swap or disk, a wanted reboot or waiting updates first.
 - [ ] **3p.10** `d`, `r` and `u` ask with what they do (`stops it; connected users are cut off`, `installs 5 updates, 1.2G free`, and `LOW, may fail` when the root disk is 90% full or has under 512M); while `u` runs the footer counts the seconds.
 - [ ] **3p.11** a stopped guest's detail pane says `stopped; last started 3d ago (task log)` (or `no start in the task log`), read from `pvesh get /nodes/<node>/tasks --vmid ID`; the weekly backup container, stopped after its run, shows when it last ran.
+- [ ] **3p.12** a guest's detail pane lists its last starts and how long each ran (`starts: 2d ago ran 1h12m, …`); a stopped guest not started for 7 days (`YAGURA_STALE_DAYS`) is yellow, its STATE reads `stale`.
+- [ ] **3p.13** a task that failed in the last 24 h puts a red `!` after the STATE and a `failed …` line in the detail pane; the detail also says `snapshots: N, oldest Xd ago` and matches `pvesh get /nodes/<node>/<kind>/<id>/snapshot`.
+- [ ] **3p.14** the header's third line lists the active storages with their use (red from 90%) and `reboot needed` in red when `/var/run/reboot-required` exists on the host.
+- [ ] **3p.15** `Space` marks guests (`+` before the ID, `N marked` in the title); `u` / `o` / `d` / `r` ask once for all of them, listing the targets, and run them one after another; `Esc` clears the marks.
+- [ ] **3p.16** `l` inside a guest switches to its journal (newest lines, `j`/`k` scroll back, `G` newest); a stopped guest says there is no log; `l` again returns to the processes.
+- [ ] **3p.17** in a terminal about 100 columns wide the table hides TAGS, OS, NEW, VER, APP, NET and UP in that order and keeps ID, NAME, STATE, CPU, MEM, DISK; Tera Term shows no garbled characters.
 
 ## 4. Resizing the columns
 
