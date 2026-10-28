@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-266 rows to press (266 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+268 rows to press (268 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -282,6 +282,8 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.32** Enter on a storage that holds backups (e.g. a PBS or `local`) opens the list (VMID, date, size, file, `protected`); on a storage without `backup` content the status line says so. j/k and Esc work.
 - [ ] **3p.33** In that list `Space` marks rows (`*`), `d` asks y/n with the count and the size to be given back (protected backups are left out and counted); `y` deletes them and the list on the next Enter no longer has them.
 - [ ] **3p.34** `r` on a backup asks y/n for a restore as a new guest with a free id (not an existing one); `y` starts it and the new guest appears stopped in the guest list.
+- [ ] **3p.35** `c` in the guest list (or the graph screen) opens the guest's configuration read only (same keys as `qm config`/`pct config`); j/k scroll, Esc closes; an unreadable one says so.
+- [ ] **3p.36** `e` opens the memory (MiB) and cores form for the marked guests (or the one under the cursor); digits and Tab work, blank keeps the value, Enter asks y/n listing the guests; `y` sets them and `c` shows the new values.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

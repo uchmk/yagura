@@ -135,6 +135,48 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("j/k move  d delete  r roll back (asks first)  Esc close", DIM));
             (format!(" snapshots of {} {} ", t.id, t.name), l)
         }
+        Dialog::Config { t, list, top } => {
+            let mut l = vec![];
+            match list {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(c) if c.is_empty() => l.push(Line::styled("the configuration could not be read", DIM)),
+                Some(c) => {
+                    let room = (f.area().height as usize).saturating_sub(8).clamp(3, 30);
+                    let top = (*top).min(c.len().saturating_sub(room));
+                    let key_w = c.iter().map(|(k, _)| k.len()).max().unwrap_or(0).min(16);
+                    // A line is cut at the box: 100 columns less the border, the key and a gap.
+                    let val_w = 100 - 2 - key_w - 2;
+                    for (k, v) in c.iter().skip(top).take(room) {
+                        l.push(Line::raw(format!("{k:<key_w$}  {}", v.chars().take(val_w).collect::<String>())));
+                    }
+                    if c.len() > room {
+                        l.push(Line::styled(format!("  {}-{} of {}", top + 1, (top + room).min(c.len()), c.len()), DIM));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("j/k scroll  Esc close  (read only; e in the guest list sets memory and cores)", DIM));
+            (format!(" config of {} {} ", t.id, t.name), l)
+        }
+        Dialog::Edit(form) => {
+            let field = |i: usize, name: &str, v: &str| {
+                let cur = if form.field == i { "_" } else { "" };
+                let shown = if v.is_empty() && form.field != i { "(keep)" } else { v };
+                let st = if form.field == i { Style::new().add_modifier(Modifier::BOLD) } else { Style::new() };
+                Line::styled(format!("  {name:<12}{shown}{cur}"), st)
+            };
+            let names: Vec<String> = form.targets.iter().take(4).map(|t| format!("{} {}", t.id, t.name)).collect();
+            let more = if form.targets.len() > 4 { format!(" and {} more", form.targets.len() - 4) } else { String::new() };
+            let l = vec![
+                Line::raw(format!("{}{more}", names.join(", "))),
+                Line::raw(""),
+                field(0, "memory MiB", &form.mem),
+                field(1, "cores", &form.cores),
+                Line::raw(""),
+                Line::styled("digits  Tab other field  Enter next  Esc cancel  (blank keeps the value)", DIM),
+            ];
+            (" set memory and cores ".to_string(), l)
+        }
         Dialog::Backups { storage, list, sel, marks, .. } => {
             let mut l = vec![];
             match list {
@@ -325,7 +367,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  q          quit",
+        "  c e        guest config / set mem+cores;  Storage: Enter backups",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -339,7 +381,7 @@ fn help(f: &mut Frame) {
         "The screen only reads. Nothing changes until you press y.",
         "PROBLEMS first: swap/disk full, failed task (2 each); reboot, updates, stale (1)",
         "",
-        "Press any key to close.",
+        "Press any key to close.  q quits.",
     ];
     let area = f.area();
     let w = 70.min(area.width);
@@ -776,10 +818,10 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         View::Storage => " Tab next  j/k move  Enter backups  ? help  q quit",
         View::Tasks => " Tab host  j/k move  Enter log  x stop  ? help  q quit",
         View::Guests => {
-            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  ? help  q quit"
+            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  c config  e edit  ? help  q quit"
         }
         View::Procs => " Tab storage  j/k move  ? help  q quit",
-        View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  S snap  b backup  m snaps  ? help  q quit",
+        View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  S snap  b backup  m snaps  c config  ? help  q quit",
     };
     let mut text = keys.to_string();
     if let Some((id, p, since)) = app.busy.first() {
@@ -1415,6 +1457,28 @@ mod tests {
         let s = text(&render(&a));
         assert!(s.contains("backups on nas") && s.contains("2026-10-28 09:15") && s.contains("protected"), "{s}");
         assert!(s.contains("* "), "{s}");
+    }
+
+    #[test]
+    fn the_config_and_edit_dialogs_draw() {
+        use crate::dialog::{Dialog, EditForm, Target};
+        use yagura_core::proxmox::Kind;
+        let t =
+            Target { id: 101, name: "web".into(), kind: Kind::Lxc, node: "pve".into(), maxmem: 1 << 30, used: 1 << 30, template: false };
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Config { t: t.clone(), list: None, top: 0 });
+        assert!(text(&render(&a)).contains("reading..."));
+        let list = vec![("cores".to_string(), "2".to_string()), ("memory".to_string(), "2048".to_string())];
+        a.dialog = Some(Dialog::Config { t: t.clone(), list: Some(list), top: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("config of 101") && s.contains("memory") && s.contains("2048"), "{s}");
+        a.dialog = Some(Dialog::Config { t: t.clone(), list: Some(vec![]), top: 0 });
+        assert!(text(&render(&a)).contains("could not be read"));
+        let mut f = EditForm::new(vec![t]);
+        f.mem = "4096".into();
+        a.dialog = Some(Dialog::Edit(f));
+        let s = text(&render(&a));
+        assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
     }
 
     #[test]

@@ -117,6 +117,14 @@ pub enum Dialog {
         sel: usize,
     },
     /// The backup files of a storage: the list (`None` while it is read), the cursor and the marked rows.
+    /// A guest's configuration, read only (`None` while it is read, empty when it could not be); `top` is the first row shown.
+    Config {
+        t: Target,
+        list: Option<Vec<(String, String)>>,
+        top: usize,
+    },
+    /// Memory and cores to set on these guests.
+    Edit(EditForm),
     Backups {
         node: String,
         storage: String,
@@ -270,6 +278,58 @@ pub fn sure_stop(t: &HostTask) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label: format!("stop {what}"), cmds }, lines }
 }
 
+/// The form for memory (MiB) and cores; a blank field keeps the guest's value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditForm {
+    pub targets: Vec<Target>,
+    pub mem: String,
+    pub cores: String,
+    /// 0 = memory, 1 = cores.
+    pub field: usize,
+}
+
+impl EditForm {
+    pub fn new(targets: Vec<Target>) -> EditForm {
+        EditForm { targets, mem: String::new(), cores: String::new(), field: 0 }
+    }
+
+    fn field_mut(&mut self) -> &mut String {
+        if self.field == 0 { &mut self.mem } else { &mut self.cores }
+    }
+}
+
+/// The last question for a memory and cores change; `None` when both fields are blank or out of range.
+pub fn sure_edit(f: &EditForm) -> Option<Sure> {
+    let num = |s: &str, lo: u32, hi: u32| {
+        if s.is_empty() { Some(None) } else { s.parse::<u32>().ok().filter(|v| (lo..=hi).contains(v)).map(Some) }
+    };
+    let (mem, cores) = (num(&f.mem, 16, 4_194_304)?, num(&f.cores, 1, 512)?);
+    if mem.is_none() && cores.is_none() {
+        return None;
+    }
+    let mut what = vec![];
+    if let Some(m) = mem {
+        what.push(format!("memory {m} MiB"));
+    }
+    if let Some(c) = cores {
+        what.push(format!("{c} cores"));
+    }
+    let what = what.join(", ");
+    let mut lines = vec![(format!("set {what} on {} guests", f.targets.len()), false)];
+    for t in f.targets.iter().take(LISTED) {
+        lines.push((
+            format!("  {} {} ({} now {})", t.id, t.name, if t.kind == Kind::Lxc { "container" } else { "VM" }, bytes(t.maxmem)),
+            false,
+        ));
+    }
+    if f.targets.len() > LISTED {
+        lines.push((format!("  ... and {} more", f.targets.len() - LISTED), false));
+    }
+    lines.push(("a running guest takes most of this only after a restart".into(), true));
+    let cmds = f.targets.iter().map(|t| ops::set_cmd(t.kind, t.id, mem, cores)).collect();
+    Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("set {what}"), cmds }, lines })
+}
+
 /// How many items the cleanup question lists before it says "and N more".
 const LISTED: usize = 12;
 
@@ -377,6 +437,38 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => (Some(Dialog::Snaps { t, list, sel }), Next::Nothing),
             }
         }
+        Dialog::Config { t, list, top } => {
+            let n = list.as_ref().map_or(0, Vec::len);
+            let top = match code {
+                KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => (top + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('k') | KeyCode::Up => top.saturating_sub(1),
+                KeyCode::Char('g') | KeyCode::Home => 0,
+                KeyCode::Char('G') | KeyCode::End => n.saturating_sub(1),
+                _ => top,
+            };
+            (Some(Dialog::Config { t, list, top }), Next::Nothing)
+        }
+        Dialog::Edit(mut f) => match code {
+            KeyCode::Esc => (None, Next::Nothing),
+            KeyCode::Tab | KeyCode::Down | KeyCode::Up => {
+                f.field = 1 - f.field;
+                (Some(Dialog::Edit(f)), Next::Nothing)
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() && f.field_mut().len() < 7 => {
+                f.field_mut().push(c);
+                (Some(Dialog::Edit(f)), Next::Nothing)
+            }
+            KeyCode::Backspace => {
+                f.field_mut().pop();
+                (Some(Dialog::Edit(f)), Next::Nothing)
+            }
+            KeyCode::Enter => match sure_edit(&f) {
+                Some(s) => (Some(Dialog::Sure(s)), Next::Nothing),
+                None => (Some(Dialog::Edit(f)), Next::Nothing),
+            },
+            _ => (Some(Dialog::Edit(f)), Next::Nothing),
+        },
         Dialog::Backups { node, storage, list, sel, mut marks } => {
             let n = list.as_ref().map_or(0, Vec::len);
             let stay = |node, storage, list, sel, marks| (Some(Dialog::Backups { node, storage, list, sel, marks }), Next::Nothing);
@@ -510,6 +602,39 @@ mod tests {
         let s = sure_restore(&b(100, 1_793_178_900, false), 120).unwrap();
         assert!(s.lines[1].0.contains("2026-10-28 09:15"));
         assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds[0].prog == "pct" && cmds[0].args[1] == "120"));
+    }
+
+    #[test]
+    fn the_edit_form_takes_digits_and_asks_before_setting() {
+        let none = |_: &Target| None;
+        let d = Dialog::Edit(EditForm::new(vec![target(Kind::Qemu), target(Kind::Lxc)]));
+        // Blank fields: Enter stays on the form.
+        let (d, _) = key(d, KeyCode::Enter, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('x'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('2'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('0'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('4'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('8'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Tab, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('4'), none);
+        let Some(Dialog::Edit(f)) = &d else { panic!("left the form") };
+        assert_eq!((f.mem.as_str(), f.cores.as_str()), ("2048", "4"));
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        let Op::Cmds { cmds, .. } = &s.op else { panic!("not commands") };
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0].prog, "qm");
+        assert_eq!(cmds[1].prog, "pct");
+        assert!(cmds[0].args.contains(&"2048".to_string()) && cmds[0].args.contains(&"4".to_string()));
+        // Out of range stays on the form.
+        let mut f = EditForm::new(vec![target(Kind::Qemu)]);
+        f.cores = "0".into();
+        assert!(sure_edit(&f).is_none());
+        // The configuration view scrolls and closes.
+        let list = Some(vec![("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())]);
+        let (d, _) = key(Dialog::Config { t: target(Kind::Qemu), list, top: 0 }, KeyCode::Char('j'), none);
+        assert!(matches!(d, Some(Dialog::Config { top: 1, .. })));
+        assert!(key(d.unwrap(), KeyCode::Esc, none).0.is_none());
     }
 
     #[test]

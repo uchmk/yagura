@@ -115,6 +115,8 @@ enum Job {
     Op(u32, String, Result<(), String>),
     /// What the cleanup scan found to remove.
     Cleanup(Vec<proxmox::ops::Item>),
+    /// A guest's configuration (empty when it could not be read).
+    Config(u32, Vec<(String, String)>),
     /// The backup files of a storage (node, storage, list).
     Backups(String, String, Vec<proxmox::ops::Backup>),
     /// A free guest id for restoring this backup.
@@ -128,7 +130,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  x stop task  Enter (storage) backups  l logs  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  x stop task  Enter (storage) backups  l logs  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -250,6 +252,13 @@ fn run(
                         Ok(()) => format!("{label} done"),
                         Err(e) => format!("{label} failed: {e}"),
                     };
+                }
+                Job::Config(id, l) => {
+                    if let Some(dialog::Dialog::Config { list, .. }) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Config { t, .. } if t.id == id))
+                    {
+                        *list = Some(l);
+                    }
                 }
                 Job::Backups(n, s, l) => {
                     if let Some(dialog::Dialog::Backups { list, .. }) = app
@@ -391,6 +400,10 @@ fn run(
             KeyCode::Char('b') if matches!(app.view, View::Guests | View::Graph(_)) => open_dump(app, jobs_tx),
             KeyCode::Char('m') if matches!(app.view, View::Guests | View::Graph(_)) => open_snaps(app, jobs_tx),
             KeyCode::Char('C') if app.view == View::Guests => open_cleanup(app, jobs_tx),
+            KeyCode::Char('c') if !k.modifiers.contains(KeyModifiers::CONTROL) && matches!(app.view, View::Guests | View::Graph(_)) => {
+                open_config(app, jobs_tx)
+            }
+            KeyCode::Char('e') if app.view == View::Guests => open_edit(app),
             KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
             KeyCode::Char(' ') if app.view == View::Guests => {
                 if let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id)
@@ -515,6 +528,35 @@ fn open_snaps(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Snaps(t.id, proxmox::ops::snapshots(&t.node, t.kind, t.id)));
         })
         .expect("spawn the snapshots thread");
+}
+
+/// `c`: the configuration of the guest, read in the background.
+fn open_config(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = target(app) else { return };
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Config { t: t.clone(), list: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-config".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Config(t.id, proxmox::ops::config(&t.node, t.kind, t.id).unwrap_or_default()));
+        })
+        .expect("spawn the config thread");
+}
+
+/// `e`: the memory and cores form for the marked guests, or the one under the cursor.
+fn open_edit(app: &mut App) {
+    let guests = app.model.guests(app.sort);
+    let targets: Vec<dialog::Target> = if app.marks.is_empty() {
+        guests.get(app.selected).into_iter().map(|g| dialog::Target::of(g)).collect()
+    } else {
+        guests.iter().filter(|g| app.marks.contains(&g.id)).map(|g| dialog::Target::of(g)).collect()
+    };
+    if targets.is_empty() {
+        return;
+    }
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Edit(dialog::EditForm::new(targets)));
 }
 
 /// Enter in the storage screen: the backup files of the storage under the cursor, read in the background.
