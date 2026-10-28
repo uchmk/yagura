@@ -1009,7 +1009,7 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
     ]);
     let nodes = m.cluster.nodes.iter().map(|n| format!("{} {}", n.name, if n.online { "online" } else { "offline" })).collect::<Vec<_>>();
     let mut l3 = vec![Span::styled(format!(" pve: {}", if nodes.is_empty() { note(m.cluster.note) } else { nodes.join(", ") }), DIM)];
-    l3.extend(host_state(&m.cluster));
+    l3.extend(host_state(&m.cluster, m.host_node()));
     if let Some(t) = m.backup_failures(unix_now()).first() {
         let ago = age(unix_now().saturating_sub(t.end.unwrap_or(t.start)));
         l3.push(Span::styled(format!("  backup FAILED {ago} ago"), RED.add_modifier(Modifier::BOLD)));
@@ -1021,8 +1021,13 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// What the host itself needs a look at: how full its storages are (red from 90%) and whether it wants a reboot.
-fn host_state(c: &yagura_core::proxmox::Cluster) -> Vec<Span<'static>> {
+fn host_state(c: &yagura_core::proxmox::Cluster, host: Option<&str>) -> Vec<Span<'static>> {
     let mut out = vec![];
+    // What the running guests are promised, against what the node has; memory past the node's own is red.
+    if let Some(a) = host.and_then(|h| c.alloc(h)).filter(|a| a.vcpus > 0 || a.mem > 0) {
+        let st = if a.mem_over() { RED.add_modifier(Modifier::BOLD) } else { DIM };
+        out.push(Span::styled(format!("  alloc cpu {}/{} mem {}/{}", a.vcpus, a.cpus, bytes(a.mem), bytes(a.maxmem)), st));
+    }
     let used: Vec<_> = c.storage.iter().filter(|s| s.active).filter_map(|s| s.pct().map(|p| (s.name.clone(), p))).collect();
     if !used.is_empty() {
         out.push(Span::styled("  storage", DIM));
@@ -1944,6 +1949,19 @@ mod tests {
         });
         let s = text(&render(&a));
         assert!(s.contains("upgrade 6 guests: 101 web, 102 c102, 103 c103, 104 c104 +2 more"), "{s}");
+    }
+
+    #[test]
+    fn the_host_header_shows_what_the_guests_are_promised() {
+        use yagura_core::proxmox::{Guest, Node, Status};
+        let mut a = app(View::Guests);
+        a.model.host = "pve".into();
+        a.model.cluster.nodes = vec![Node { name: "pve".into(), online: true, cpus: 4, maxmem: 8 << 30, ..Default::default() }];
+        a.model.cluster.guests =
+            vec![Guest { id: 1, node: "pve".into(), status: Status::Running, cpus: 6, maxmem: 12 << 30, ..Default::default() }];
+        let b = render(&a);
+        let s = text(&b);
+        assert!(s.contains("alloc cpu 6/4 mem 12G/8.0G"), "{s}");
     }
 
     #[test]

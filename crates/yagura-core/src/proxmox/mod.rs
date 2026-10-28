@@ -104,7 +104,31 @@ pub struct Cluster {
     pub temp_c: Option<f32>,
 }
 
+/// What the running guests of a node are given, against what the node has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Alloc {
+    pub vcpus: u32,
+    pub cpus: u32,
+    pub mem: u64,
+    pub maxmem: u64,
+}
+
+impl Alloc {
+    /// More memory is promised than the node has: a guest can be killed when they all fill up.
+    pub fn mem_over(&self) -> bool {
+        self.maxmem > 0 && self.mem > self.maxmem
+    }
+}
+
 impl Cluster {
+    /// The CPUs and memory given to the running guests (templates left out) of `node`, with what the node has. `None` for an unknown node.
+    pub fn alloc(&self, node: &str) -> Option<Alloc> {
+        let n = self.nodes.iter().find(|n| n.name == node)?;
+        let on = self.guests.iter().filter(|g| g.node == node && g.status == Status::Running && !g.template);
+        let (vcpus, mem) = on.fold((0, 0), |(c, m), g| (c + g.cpus, m + g.maxmem));
+        Some(Alloc { vcpus, cpus: n.cpus, mem, maxmem: n.maxmem })
+    }
+
     /// Pools whose health is not `ONLINE`.
     pub fn bad_pools(&self) -> Vec<&(String, String)> {
         self.pools.iter().filter(|p| p.1 != "ONLINE").collect()
@@ -786,6 +810,35 @@ pub fn inspect(kind: Kind, id: u32) -> Inside {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_allocation_counts_running_guests_of_a_node() {
+        let g = |id, node: &str, status, cpus, mem, template| Guest {
+            id,
+            node: node.into(),
+            status,
+            cpus,
+            maxmem: mem,
+            template,
+            ..Default::default()
+        };
+        let c = Cluster {
+            nodes: vec![Node { name: "pve".into(), cpus: 8, maxmem: 32 << 30, ..Default::default() }],
+            guests: vec![
+                g(1, "pve", Status::Running, 4, 16 << 30, false),
+                g(2, "pve", Status::Running, 8, 24 << 30, false),
+                g(3, "pve", Status::Stopped, 16, 64 << 30, false),
+                g(4, "pve", Status::Running, 2, 8 << 30, true),
+                g(5, "pve2", Status::Running, 2, 8 << 30, false),
+            ],
+            ..Default::default()
+        };
+        let a = c.alloc("pve").unwrap();
+        assert_eq!((a.vcpus, a.cpus, a.mem, a.maxmem), (12, 8, 40 << 30, 32 << 30));
+        assert!(a.mem_over());
+        assert!(c.alloc("pve2").is_none());
+        assert!(!Alloc { vcpus: 1, cpus: 1, mem: 1, maxmem: 0 }.mem_over());
+    }
 
     #[test]
     fn host_tasks_and_logs() {
