@@ -805,6 +805,39 @@ pub fn apt_refresh_cmd(node: &str) -> Cmd {
     Cmd::new("pvesh", &["create", &format!("/nodes/{}/apt/update", if ok { node } else { "invalid" })])
 }
 
+/// The lines of the certificate page from `/nodes/<n>/certificates/info`: each certificate with its subject, issuer and how long
+/// it still holds. Under 30 days is marked EXPIRES SOON, past is marked EXPIRED.
+pub fn parse_certs(json: &str, now: u64) -> Vec<String> {
+    let v: Value = serde_json::from_str(json).unwrap_or(Value::Null);
+    let Some(a) = v.as_array() else { return vec![] };
+    let s = |x: &Value, k: &str| x[k].as_str().unwrap_or("?").to_string();
+    let mut out = vec![format!("certificates ({})", a.len())];
+    for x in a {
+        let left = match x["notafter"].as_u64() {
+            Some(e) if e <= now => format!("EXPIRED {}d ago", (now - e).div_ceil(86400)),
+            Some(e) if e - now < 30 * 86400 => format!("EXPIRES SOON: in {}d", (e - now).div_ceil(86400)),
+            Some(e) => format!("valid for {}d", (e - now) / 86400),
+            None => "no end date".into(),
+        };
+        out.push(format!("  {}  {left}", s(x, "filename")));
+        out.push(format!("    subject {}", s(x, "subject")));
+        out.push(format!("    issuer  {}", s(x, "issuer")));
+        if let Some(san) = x["san"].as_array().filter(|l| !l.is_empty()) {
+            out.push(format!("    names   {}", san.iter().filter_map(|n| n.as_str()).collect::<Vec<_>>().join(", ")));
+        }
+    }
+    out
+}
+
+/// This node's certificates (read-only `pvesh`).
+pub fn certificates(now: u64) -> Vec<String> {
+    let node = this_node();
+    if node.is_empty() {
+        return vec![];
+    }
+    pvesh(&format!("/nodes/{node}/certificates/info"), &[]).map(|j| parse_certs(&j, now)).unwrap_or_default()
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -1230,6 +1263,20 @@ mod tests {
             assert!(backup_job_save_cmd(None, &bad).is_err(), "{bad:?}");
         }
         assert_eq!(backup_job_delete_cmd("backup-1").args, ["delete", "/cluster/backup/backup-1"]);
+    }
+
+    #[test]
+    fn certificates_show_how_long_they_hold() {
+        let j = r#"[{"filename":"pve-ssl.pem","subject":"CN=pve1","issuer":"CN=PVE CA","notafter":1000000,"san":["pve1","10.0.0.1"]},
+                    {"filename":"pveproxy-ssl.pem","subject":"CN=a","issuer":"CN=b","notafter":5000000},
+                    {"filename":"old.pem","notafter":10}]"#;
+        let l = parse_certs(j, 900_000);
+        assert_eq!(l[0], "certificates (3)");
+        assert_eq!(l[1], "  pve-ssl.pem  EXPIRES SOON: in 2d");
+        assert!(l[2].contains("CN=pve1") && l[3].contains("CN=PVE CA") && l[4].ends_with("pve1, 10.0.0.1"), "{l:?}");
+        assert!(l.contains(&"  pveproxy-ssl.pem  valid for 47d".to_string()), "{l:?}");
+        assert!(l.iter().any(|s| s.contains("old.pem  EXPIRED 11d ago")), "{l:?}");
+        assert!(parse_certs("x", 0).is_empty());
     }
 
     #[test]

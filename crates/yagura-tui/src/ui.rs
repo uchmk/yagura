@@ -175,7 +175,12 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                     let room = (f.area().height as usize).saturating_sub(8).clamp(3, 30);
                     let top = (*top).min(c.len().saturating_sub(room));
                     for s in c.iter().skip(top).take(room) {
-                        let st = if s.contains("OFF") || s.contains("EXPIRED") || s.contains("FAILING") || s.contains("UNHEALTHY") {
+                        let st = if s.contains("OFF")
+                            || s.contains("EXPIRED")
+                            || s.contains("EXPIRES SOON")
+                            || s.contains("FAILING")
+                            || s.contains("UNHEALTHY")
+                        {
                             RED
                         } else {
                             Style::new()
@@ -666,7 +671,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, U package updates, V refresh them;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, U package updates, V refresh them, K certificates;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1844,6 +1849,15 @@ mod tests {
         a.dialog = Some(Dialog::Text { title: "replication".into(), lines: Some(lines), top: 0 });
         let s = text(&render(&a));
         assert!(s.contains("replication jobs (1)") && s.contains("pve1 -> pve2") && s.contains("FAILING x2"), "{s}");
+    }
+
+    #[test]
+    fn the_certificates_page_draws() {
+        let mut a = app(View::Host);
+        let lines = vec!["certificates (1)".to_string(), "  pve-ssl.pem  EXPIRES SOON: in 3d".to_string()];
+        a.dialog = Some(Dialog::Text { title: "certificates".into(), lines: Some(lines), top: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("certificates (1)") && s.contains("EXPIRES SOON: in 3d"), "{s}");
     }
 
     #[test]
