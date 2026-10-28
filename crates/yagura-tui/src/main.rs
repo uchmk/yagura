@@ -137,7 +137,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -267,6 +267,15 @@ fn run(
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Resize { t, .. } if t.id == id))
                     {
                         *disks = Some(proxmox::ops::disks(t.kind, &l));
+                    }
+                    if let Some(dialog::Dialog::Net { t, nets, bridge, vlan, mac, .. }) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Net { t, .. } if t.id == id))
+                    {
+                        let l = proxmox::ops::nets(&l);
+                        if let Some((_, v)) = l.first() {
+                            (*bridge, *vlan, *mac) = proxmox::ops::net_fields(t.kind, v);
+                        }
+                        *nets = Some(l);
                     }
                     if let Some(dialog::Dialog::Config { list, .. }) =
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Config { t, .. } if t.id == id))
@@ -438,6 +447,7 @@ fn run(
             KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
             KeyCode::Char('D') if matches!(app.view, View::Guests | View::Graph(_)) => open_destroy(app),
             KeyCode::Char('T') if matches!(app.view, View::Guests | View::Graph(_)) => open_template(app),
+            KeyCode::Char('N') if matches!(app.view, View::Guests | View::Graph(_)) => open_net(app, jobs_tx),
             KeyCode::Char('t') if matches!(app.view, View::Guests | View::Graph(_)) => open_console(app),
             KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
             KeyCode::Char(' ') if app.view == View::Guests => {
@@ -624,6 +634,27 @@ fn open_resize(app: &mut App, tx: &Sender<Job>) {
     let Some(t) = target(app) else { return };
     app.status.clear();
     app.dialog = Some(dialog::Dialog::Resize { t: t.clone(), disks: None, sel: 0, gib: String::new() });
+    read_config(t, tx);
+}
+
+/// `N`: the network devices of the guest (bridge, VLAN, MAC); the config is read in the background.
+fn open_net(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = target(app) else { return };
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Net {
+        t: t.clone(),
+        nets: None,
+        sel: 0,
+        field: 0,
+        bridge: String::new(),
+        vlan: String::new(),
+        mac: String::new(),
+    });
+    read_config(t, tx);
+}
+
+/// Read the configuration of a guest on a thread of its own; the answer is a `Job::Config`.
+fn read_config(t: dialog::Target, tx: &Sender<Job>) {
     let tx = tx.clone();
     std::thread::Builder::new()
         .name("yagura-config".into())

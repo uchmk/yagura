@@ -172,6 +172,40 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ];
             (" node ".to_string(), l)
         }
+        Dialog::Net { t, nets, sel, field, bridge, vlan, mac } => {
+            let mut l = vec![];
+            match nets {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(d) if d.is_empty() => l.push(Line::styled("no network devices", DIM)),
+                Some(d) => {
+                    for (i, (k, v)) in d.iter().enumerate() {
+                        let st = if i == *sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+                        l.push(Line::styled(format!(" {k:<6} {v}"), st));
+                    }
+                    l.push(Line::raw(""));
+                    let bad_vlan = !(vlan.is_empty() || vlan.parse::<u32>().is_ok_and(|v| (1..=4094).contains(&v)));
+                    let bad_mac = !(mac.is_empty() || yagura_core::proxmox::ops::valid_mac(mac));
+                    for (i, (name, val, bad)) in
+                        [("bridge", bridge, bridge.is_empty()), ("VLAN  ", vlan, bad_vlan), ("MAC   ", mac, bad_mac)]
+                            .into_iter()
+                            .enumerate()
+                    {
+                        let cur = if i == *field { "_" } else { "" };
+                        let st = if bad {
+                            RED
+                        } else if i == *field {
+                            Style::new().add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::new()
+                        };
+                        l.push(Line::styled(format!("  {name}  {val}{cur}"), st));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("Up/Down device  Tab field  Enter ask  Esc cancel (empty VLAN: no tag)", DIM));
+            (format!(" network of {} {} ", t.id, t.name), l)
+        }
         Dialog::Clone { t, name, full } => {
             let ok = yagura_core::proxmox::ops::valid_guest_name(name);
             let how = if *full { "full copy" } else { "linked clone" };
@@ -439,7 +473,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T  clone / delete / template;  Storage: Enter backups",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N  clone / delete / template / network;  Storage: Enter backups",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1556,6 +1590,27 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_net_dialog_draws() {
+        use crate::dialog::Target;
+        let t = Target { id: 100, name: "vm".into(), kind: Kind::Qemu, node: "pve".into(), maxmem: 0, used: 0, template: false };
+        let mut a = app(View::Guests);
+        let d = |nets| Dialog::Net {
+            t: t.clone(),
+            nets,
+            sel: 0,
+            field: 1,
+            bridge: "vmbr0".into(),
+            vlan: "10".into(),
+            mac: "BC:24:11:00:00:01".into(),
+        };
+        a.dialog = Some(d(None));
+        assert!(text(&render(&a)).contains("reading..."));
+        a.dialog = Some(d(Some(vec![("net0".into(), "virtio=BC:24:11:00:00:01,bridge=vmbr0,tag=10".into())])));
+        let s = text(&render(&a));
+        assert!(s.contains("net0") && s.contains("bridge  vmbr0") && s.contains("VLAN    10_") && s.contains("BC:24:11:00:00:01"), "{s}");
     }
 
     #[test]

@@ -124,6 +124,17 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// The network devices of a guest (`None` while the config is read), the one under the cursor and its bridge, VLAN tag and MAC;
+    /// `field` is the one being typed (0 bridge, 1 VLAN, 2 MAC).
+    Net {
+        t: Target,
+        nets: Option<Vec<(String, String)>>,
+        sel: usize,
+        field: usize,
+        bridge: String,
+        vlan: String,
+        mac: String,
+    },
     /// A copy of a guest: the new name and whether the disks are copied (`full`) or linked (templates only).
     Clone {
         t: Target,
@@ -399,6 +410,25 @@ pub fn sure_maintenance(node: &str, on: bool) -> Sure {
     }
 }
 
+/// The last question for the network device under the cursor with the bridge, VLAN tag and MAC typed; `None` for a bad value.
+pub fn sure_net(t: &Target, nets: &[(String, String)], sel: usize, bridge: &str, vlan: &str, mac: &str) -> Option<Sure> {
+    let (dev, old) = nets.get(sel)?;
+    if bridge.is_empty()
+        || !(vlan.is_empty() || vlan.parse::<u32>().is_ok_and(|v| (1..=4094).contains(&v)))
+        || !(mac.is_empty() || ops::valid_mac(mac))
+    {
+        return None;
+    }
+    let new = ops::net_apply(t.kind, old, bridge, vlan, mac);
+    let mut lines =
+        vec![(format!("{dev} of {} {}", t.id, t.name), false), (format!("  now {old}"), false), (format!("  new {new}"), false)];
+    if new == *old {
+        lines.push(("nothing changes".into(), false));
+    }
+    lines.push(("a new MAC or bridge can cut the guest off from the network until it is set right again".into(), true));
+    Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("set {dev}"), cmds: vec![ops::net_cmd(t.kind, t.id, dev, &new)] }, lines })
+}
+
 /// The last question for cloning `t` as guest `newid`.
 pub fn sure_clone(t: &Target, name: &str, full: bool, newid: u32) -> Sure {
     let how = if full { "full copy of the disks" } else { "linked clone (shares the template's disks)" };
@@ -590,6 +620,42 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => top,
             };
             (Some(Dialog::Config { t, list, top }), Next::Nothing)
+        }
+        Dialog::Net { t, nets, mut sel, mut field, mut bridge, mut vlan, mut mac } => {
+            let n = nets.as_ref().map_or(0, Vec::len);
+            let mut moved = false;
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Down if sel + 1 < n => {
+                    sel += 1;
+                    moved = true;
+                }
+                KeyCode::Up if sel > 0 => {
+                    sel -= 1;
+                    moved = true;
+                }
+                KeyCode::Tab => field = (field + 1) % 3,
+                KeyCode::BackTab => field = (field + 2) % 3,
+                KeyCode::Backspace => {
+                    [&mut bridge, &mut vlan, &mut mac][field].pop();
+                }
+                KeyCode::Char(c) => match field {
+                    0 if (c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && bridge.len() < 20 => bridge.push(c),
+                    1 if c.is_ascii_digit() && vlan.len() < 4 => vlan.push(c),
+                    2 if (c.is_ascii_hexdigit() || c == ':') && mac.len() < 17 => mac.push(c),
+                    _ => {}
+                },
+                KeyCode::Enter => {
+                    if let Some(s) = sure_net(&t, nets.as_deref().unwrap_or(&[]), sel, &bridge, &vlan, &mac) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            if moved && let Some((_, v)) = nets.as_ref().and_then(|l| l.get(sel)) {
+                (bridge, vlan, mac) = ops::net_fields(t.kind, v);
+            }
+            (Some(Dialog::Net { t, nets, sel, field, bridge, vlan, mac }), Next::Nothing)
         }
         Dialog::Clone { t, mut name, mut full } => match code {
             KeyCode::Esc => (None, Next::Nothing),
@@ -826,6 +892,44 @@ mod tests {
         assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_net_dialog_follows_the_cursor_and_asks_before_setting() {
+        let none = |_: &Target| None;
+        let nets = vec![
+            ("net0".to_string(), "virtio=BC:24:11:00:00:01,bridge=vmbr0".to_string()),
+            ("net1".to_string(), "virtio=BC:24:11:00:00:02,bridge=vmbr1,tag=7".to_string()),
+        ];
+        let d = Dialog::Net {
+            t: target(Kind::Qemu),
+            nets: Some(nets),
+            sel: 0,
+            field: 0,
+            bridge: "vmbr0".into(),
+            vlan: String::new(),
+            mac: "BC:24:11:00:00:01".into(),
+        };
+        // Down shows the second device.
+        let (d, _) = key(d, KeyCode::Down, none);
+        let Some(Dialog::Net { ref bridge, ref vlan, sel: 1, .. }) = d else { panic!("moved wrong") };
+        assert_eq!((bridge.as_str(), vlan.as_str()), ("vmbr1", "7"));
+        // Letters go to the bridge, Tab moves to the VLAN, which takes digits only.
+        let (d, _) = key(d.unwrap(), KeyCode::Char('x'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Tab, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('z'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Backspace, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('9'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        let want = ops::net_cmd(Kind::Qemu, 101, "net1", "virtio=BC:24:11:00:00:02,bridge=vmbr1x,tag=9");
+        assert_eq!(s.op, Op::Cmds { label: "set net1".into(), cmds: vec![want] });
+        assert!(s.lines.iter().any(|l| l.1));
+        // A bad VLAN or MAC does not go on.
+        let nets = vec![("net0".to_string(), "virtio=BC:24:11:00:00:01,bridge=vmbr0".to_string())];
+        assert!(sure_net(&target(Kind::Qemu), &nets, 0, "vmbr0", "5000", "").is_none());
+        assert!(sure_net(&target(Kind::Qemu), &nets, 0, "vmbr0", "", "nope").is_none());
+        assert!(sure_net(&target(Kind::Qemu), &nets, 0, "", "", "").is_none());
     }
 
     #[test]

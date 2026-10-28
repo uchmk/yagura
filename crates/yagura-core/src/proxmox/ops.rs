@@ -360,6 +360,75 @@ pub fn clone_cmd(kind: Kind, id: u32, newid: u32, name: &str, full: bool) -> Cmd
     Cmd::new(prog, &args)
 }
 
+/// The network devices in a guest's configuration as (key, value), e.g. `("net0", "virtio=BC:24:11:00:00:01,bridge=vmbr0,tag=10")`.
+pub fn nets(cfg: &[(String, String)]) -> Vec<(String, String)> {
+    cfg.iter()
+        .filter(|(k, _)| k.strip_prefix("net").is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit())))
+        .cloned()
+        .collect()
+}
+
+/// The (bridge, VLAN tag, MAC) of a network device value; a VM keeps its MAC after the model (`virtio=MAC`), a container in `hwaddr=`.
+pub fn net_fields(kind: Kind, value: &str) -> (String, String, String) {
+    let (mut bridge, mut vlan, mut mac) = (String::new(), String::new(), String::new());
+    for (i, part) in value.split(',').enumerate() {
+        match part.split_once('=') {
+            Some(("bridge", v)) => bridge = v.to_string(),
+            Some(("tag", v)) => vlan = v.to_string(),
+            Some(("hwaddr", v)) if kind == Kind::Lxc => mac = v.to_string(),
+            Some((_, v)) if i == 0 && kind == Kind::Qemu => mac = v.to_string(),
+            _ => {}
+        }
+    }
+    (bridge, vlan, mac)
+}
+
+/// `aa:bb:cc:dd:ee:ff` (hex, either case).
+pub fn valid_mac(s: &str) -> bool {
+    let p: Vec<&str> = s.split(':').collect();
+    p.len() == 6 && p.iter().all(|x| x.len() == 2 && x.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The device value with a new bridge, VLAN tag (empty: no tag) and MAC (empty: unchanged); the other options stay as they are.
+pub fn net_apply(kind: Kind, value: &str, bridge: &str, vlan: &str, mac: &str) -> String {
+    let mut out: Vec<String> = vec![];
+    let (mut saw_bridge, mut saw_tag) = (false, false);
+    for (i, part) in value.split(',').enumerate() {
+        match part.split_once('=') {
+            Some(("bridge", _)) if !bridge.is_empty() => {
+                saw_bridge = true;
+                out.push(format!("bridge={bridge}"));
+            }
+            Some(("tag", _)) => {
+                saw_tag = true;
+                if !vlan.is_empty() {
+                    out.push(format!("tag={vlan}"));
+                }
+            }
+            Some(("hwaddr", _)) if kind == Kind::Lxc && !mac.is_empty() => out.push(format!("hwaddr={mac}")),
+            Some((model, _)) if i == 0 && kind == Kind::Qemu && !mac.is_empty() => out.push(format!("{model}={mac}")),
+            _ => {
+                if part.starts_with("bridge=") {
+                    saw_bridge = true;
+                }
+                out.push(part.to_string());
+            }
+        }
+    }
+    if !saw_bridge && !bridge.is_empty() {
+        out.push(format!("bridge={bridge}"));
+    }
+    if !saw_tag && !vlan.is_empty() {
+        out.push(format!("tag={vlan}"));
+    }
+    out.join(",")
+}
+
+/// `qm set` / `pct set` with a new value for one network device.
+pub fn net_cmd(kind: Kind, id: u32, dev: &str, value: &str) -> Cmd {
+    Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), &format!("--{dev}"), value])
+}
+
 /// `qm template` / `pct template`: turn a stopped guest into a template (it can not be started again).
 pub fn template_cmd(kind: Kind, id: u32) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["template", &id.to_string()])
@@ -505,6 +574,32 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_devices_are_read_and_rewritten() {
+        let c = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let cfg = [
+            c("cores", "2"),
+            c("net0", "virtio=BC:24:11:00:00:01,bridge=vmbr0,tag=10,firewall=1"),
+            c("net1", "e1000=AA:BB:CC:DD:EE:FF,bridge=vmbr1"),
+            c("netx", "no"),
+        ];
+        assert_eq!(nets(&cfg).len(), 2);
+        let v0 = &cfg[1].1;
+        assert_eq!(net_fields(Kind::Qemu, v0), ("vmbr0".into(), "10".into(), "BC:24:11:00:00:01".into()));
+        // The bridge changes, the tag goes, the MAC stays; firewall stays.
+        assert_eq!(net_apply(Kind::Qemu, v0, "vmbr2", "", ""), "virtio=BC:24:11:00:00:01,bridge=vmbr2,firewall=1");
+        // A tag is added, the MAC changes.
+        assert_eq!(net_apply(Kind::Qemu, &cfg[2].1, "vmbr1", "20", "aa:bb:cc:00:00:01"), "e1000=aa:bb:cc:00:00:01,bridge=vmbr1,tag=20");
+        let ct = "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:09,ip=dhcp,type=veth";
+        assert_eq!(net_fields(Kind::Lxc, ct), ("vmbr0".into(), "".into(), "BC:24:11:00:00:09".into()));
+        assert_eq!(
+            net_apply(Kind::Lxc, ct, "vmbr3", "5", "bc:24:11:00:00:0a"),
+            "name=eth0,bridge=vmbr3,hwaddr=bc:24:11:00:00:0a,ip=dhcp,type=veth,tag=5"
+        );
+        assert_eq!(net_cmd(Kind::Lxc, 101, "net0", "name=eth0").args, ["set", "101", "--net0", "name=eth0"]);
+        assert!(valid_mac("bc:24:11:00:00:0a") && !valid_mac("bc:24:11:00:00") && !valid_mac("zz:24:11:00:00:0a"));
+    }
 
     #[test]
     fn clone_and_destroy_commands() {
