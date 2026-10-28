@@ -1534,6 +1534,49 @@ pub fn disk_add_cmd(kind: Kind, id: u32, keys: &[String], storage: &str, gib: u3
     Some((dev, value, cmd))
 }
 
+/// Every drive in a guest's configuration as (key, value): disks, CD-ROMs, cloud-init drives, `efidisk0`, `tpmstate0` and the
+/// `unusedN` volumes that a detached disk leaves behind; a container's `rootfs` and `mpN`.
+pub fn drives(kind: Kind, cfg: &[(String, String)]) -> Vec<(String, String)> {
+    let digits = |k: &str, p: &str| k.strip_prefix(p).is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit()));
+    cfg.iter()
+        .filter(|(k, _)| {
+            if kind == Kind::Lxc {
+                k == "rootfs" || digits(k, "mp") || digits(k, "unused")
+            } else {
+                ["scsi", "virtio", "sata", "ide", "unused"].iter().any(|p| digits(k, p)) || k == "efidisk0" || k == "tpmstate0"
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+/// Whether a drive value is a CD-ROM.
+pub fn is_cdrom(value: &str) -> bool {
+    value.contains("media=cdrom")
+}
+
+/// Whether a drive key is a volume that was detached (`unusedN`).
+pub fn is_unused(key: &str) -> bool {
+    key.starts_with("unused")
+}
+
+/// Moves a disk to another storage and deletes the source (the API call behind `qm disk move` / `pct move-volume`).
+pub fn disk_move_cmd(node: &str, kind: Kind, id: u32, key: &str, storage: &str) -> Cmd {
+    if kind == Kind::Lxc {
+        Cmd::new(
+            "pvesh",
+            &["create", &format!("/nodes/{node}/lxc/{id}/move_volume"), "--volume", key, "--storage", storage, "--delete", "1"],
+        )
+    } else {
+        Cmd::new("pvesh", &["create", &format!("/nodes/{node}/qemu/{id}/move_disk"), "--disk", key, "--storage", storage, "--delete", "1"])
+    }
+}
+
+/// `--delete <key>`: detaches a disk (it stays as `unusedN`), or destroys an `unusedN` volume for good.
+pub fn disk_detach_cmd(kind: Kind, id: u32, key: &str) -> Cmd {
+    net_del_cmd(kind, id, key)
+}
+
 /// `qm resize` / `pct resize`: grow a disk by `gib` GiB (a disk cannot be shrunk this way).
 pub fn resize_cmd(kind: Kind, id: u32, disk: &str, gib: u32) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["resize", &id.to_string(), disk, &format!("+{gib}G")])
@@ -1823,6 +1866,30 @@ mod tests {
         ] {
             assert!(storage_add_cmd(k, &f(bad)).is_err(), "{k} {bad:?}");
         }
+    }
+
+    #[test]
+    fn drives_are_listed_moved_and_detached() {
+        let cfg = |l: &[(&str, &str)]| l.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let c = cfg(&[
+            ("name", "x"),
+            ("scsi0", "a:d0"),
+            ("ide2", "none,media=cdrom"),
+            ("unused0", "a:d9"),
+            ("efidisk0", "a:e"),
+            ("net0", "virtio"),
+        ]);
+        let keys: Vec<String> = drives(Kind::Qemu, &c).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, ["scsi0", "ide2", "unused0", "efidisk0"]);
+        let keys: Vec<String> =
+            drives(Kind::Lxc, &cfg(&[("rootfs", "a:r"), ("mp0", "a:m"), ("scsi0", "x")])).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, ["rootfs", "mp0"]);
+        assert!(is_cdrom("none,media=cdrom") && !is_cdrom("a:d0") && is_unused("unused1") && !is_unused("scsi1"));
+        let m = disk_move_cmd("pve", Kind::Qemu, 100, "scsi0", "tank");
+        assert_eq!(m.args, ["create", "/nodes/pve/qemu/100/move_disk", "--disk", "scsi0", "--storage", "tank", "--delete", "1"]);
+        let m = disk_move_cmd("pve", Kind::Lxc, 200, "mp0", "tank");
+        assert_eq!(m.args[1], "/nodes/pve/lxc/200/move_volume");
+        assert_eq!(disk_detach_cmd(Kind::Qemu, 100, "scsi1").args, ["set", "100", "--delete", "scsi1"]);
     }
 
     #[test]

@@ -231,6 +231,15 @@ pub enum Dialog {
         vals: [String; 2],
         err: String,
     },
+    /// The drives of a guest: move one to another storage (`m`, typing the storage) or detach it (`d`).
+    Disks {
+        t: Target,
+        list: Option<Vec<(String, String)>>,
+        sel: usize,
+        /// `Some('m')` while the storage to move to is typed.
+        ask: Option<char>,
+        text: String,
+    },
     /// Grow a disk of a guest: its disks (`None` while the config is read), the cursor and the GiB typed.
     Resize {
         t: Target,
@@ -568,6 +577,47 @@ pub fn sure_net_del(t: &Target, nets: &[(String, String)], sel: usize) -> Option
     Some(Sure {
         t: Target::none(),
         op: Op::Cmds { label: format!("remove {dev}"), cmds: vec![ops::net_del_cmd(t.kind, t.id, dev)] },
+        lines,
+    })
+}
+
+/// The last question for moving the drive `key` to the storage `to`.
+pub fn sure_disk_move(t: &Target, key: &str, value: &str, to: &str) -> Option<Sure> {
+    if to.is_empty() || ops::is_unused(key) || ops::is_cdrom(value) {
+        return None;
+    }
+    let from = value.split(':').next().unwrap_or("");
+    let mut lines = vec![(format!("move {key} of {} {} from {from} to {to}", t.id, t.name), false), (format!("  now {value}"), false)];
+    if from == to {
+        lines.push(("it is on that storage already".into(), true));
+    }
+    lines.push((
+        "the source copy is deleted afterwards; a big disk takes minutes, and a running container must be stopped first".into(),
+        true,
+    ));
+    Some(Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("move {key} to {to}"), cmds: vec![ops::disk_move_cmd(&t.node, t.kind, t.id, key, to)] },
+        lines,
+    })
+}
+
+/// The last question for detaching the drive `key`, or for destroying it when it is an `unusedN` volume.
+pub fn sure_disk_detach(t: &Target, key: &str, value: &str) -> Option<Sure> {
+    if key == "rootfs" {
+        return None;
+    }
+    let gone = ops::is_unused(key);
+    let verb = if gone { "destroy" } else { "detach" };
+    let note = if gone {
+        "the volume and its data are deleted for good"
+    } else {
+        "the data stays as an unused volume; d on that line destroys it"
+    };
+    let lines = vec![(format!("{verb} {key} of {} {}", t.id, t.name), gone), (format!("  now {value}"), false), (note.to_string(), gone)];
+    Some(Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("{verb} {key}"), cmds: vec![ops::disk_detach_cmd(t.kind, t.id, key)] },
         lines,
     })
 }
@@ -1363,6 +1413,38 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => stay(t, disks, keys, sel, gib),
             }
         }
+        Dialog::Disks { t, list, mut sel, mut ask, mut text } => {
+            let n = list.as_ref().map_or(0, Vec::len);
+            let cur = list.as_ref().and_then(|l| l.get(sel)).cloned();
+            match (ask, code) {
+                (None, KeyCode::Esc) => return (None, Next::Nothing),
+                (Some(_), KeyCode::Esc) => {
+                    ask = None;
+                    text.clear();
+                }
+                (None, KeyCode::Char('j') | KeyCode::Down) => sel = (sel + 1).min(n.saturating_sub(1)),
+                (None, KeyCode::Char('k') | KeyCode::Up) => sel = sel.saturating_sub(1),
+                (None, KeyCode::Char('m')) if cur.as_ref().is_some_and(|(k, v)| !ops::is_unused(k) && !ops::is_cdrom(v)) => ask = Some('m'),
+                (None, KeyCode::Char('d')) => {
+                    if let Some(s) = cur.and_then(|(k, v)| sure_disk_detach(&t, &k, &v)) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                (Some(_), KeyCode::Backspace) => {
+                    text.pop();
+                }
+                (Some(_), KeyCode::Char(c)) if (c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && text.len() < 40 => {
+                    text.push(c)
+                }
+                (Some(_), KeyCode::Enter) => {
+                    if let Some(s) = cur.and_then(|(k, v)| sure_disk_move(&t, &k, &v, &text)) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Disks { t, list, sel, ask, text }), Next::Nothing)
+        }
         Dialog::Node { node, stopped, running } => {
             let sure = match code {
                 KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
@@ -2029,6 +2111,40 @@ mod tests {
         let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
         let Some(Dialog::Sure(s)) = d else { panic!("no question") };
         assert_eq!(s.op, Op::Cmds { label: "grow scsi1 by 5 GiB".into(), cmds: vec![ops::resize_cmd(Kind::Qemu, 101, "scsi1", 5)] });
+    }
+
+    #[test]
+    fn drives_are_moved_or_detached_after_a_question() {
+        let none = |_: &Target| None;
+        let list = vec![
+            ("scsi0".to_string(), "local-lvm:vm-101-disk-0,size=32G".to_string()),
+            ("ide2".to_string(), "none,media=cdrom".to_string()),
+            ("unused0".to_string(), "local-lvm:vm-101-disk-1".to_string()),
+        ];
+        let open = |sel| Dialog::Disks { t: target(Kind::Qemu), list: Some(list.clone()), sel, ask: None, text: String::new() };
+        // m asks for a storage; Esc leaves the typing, not the dialog.
+        let (d, _) = key(open(0), KeyCode::Char('m'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Esc, none);
+        assert!(matches!(d, Some(Dialog::Disks { ask: None, .. })));
+        let (mut d, _) = key(d.unwrap(), KeyCode::Char('m'), none);
+        for c in "tank".chars() {
+            d = key(d.unwrap(), KeyCode::Char(c), none).0;
+        }
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no move question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds { label: "move scsi0 to tank".into(), cmds: vec![ops::disk_move_cmd("pve", Kind::Qemu, 101, "scsi0", "tank")] }
+        );
+        // A CD-ROM and an unused volume cannot be moved.
+        assert!(matches!(key(open(1), KeyCode::Char('m'), none).0, Some(Dialog::Disks { ask: None, .. })));
+        assert!(matches!(key(open(2), KeyCode::Char('m'), none).0, Some(Dialog::Disks { ask: None, .. })));
+        // d detaches (not red), and destroys an unused volume (red).
+        let Some(Dialog::Sure(s)) = key(open(0), KeyCode::Char('d'), none).0 else { panic!("no detach question") };
+        assert!(!s.lines[0].1 && s.lines[0].0.starts_with("detach scsi0"));
+        let Some(Dialog::Sure(s)) = key(open(2), KeyCode::Char('d'), none).0 else { panic!("no destroy question") };
+        assert!(s.lines[0].1 && s.lines[0].0.starts_with("destroy unused0"));
+        assert!(sure_disk_detach(&target(Kind::Lxc), "rootfs", "a:r").is_none());
     }
 
     #[test]

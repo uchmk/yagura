@@ -424,6 +424,27 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ));
             (format!(" grow a disk of {} {} ", t.id, t.name), l)
         }
+        Dialog::Disks { t, list, sel, ask, text } => {
+            let mut l = vec![];
+            match list {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(d) if d.is_empty() => l.push(Line::styled("no drives", DIM)),
+                Some(d) => {
+                    for (i, (k, v)) in d.iter().enumerate() {
+                        let st = if i == *sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+                        l.push(Line::styled(format!(" {k:<9} {v}"), st));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            if ask.is_some() {
+                l.push(Line::styled(format!("  move to storage: {text}_"), Style::new().add_modifier(Modifier::BOLD)));
+                l.push(Line::styled("type the storage  Enter ask  Esc back", DIM));
+            } else {
+                l.push(Line::styled("j/k drive  m move to another storage  d detach (on an unused volume: destroy)  Esc close", DIM));
+            }
+            (format!(" drives of {} {} ", t.id, t.name), l)
+        }
         Dialog::Edit(form) => {
             let field = |i: usize, name: &str, v: &str| {
                 let cur = if form.field == i { "_" } else { "" };
@@ -2293,6 +2314,31 @@ mod tests {
             Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), keys: vec![], sel: 0, gib: "10".into() });
         let s = text(&render(&a));
         assert!(s.contains("scsi0") && s.contains("size=32G") && s.contains("10_"), "{s}");
+    }
+
+    #[test]
+    fn the_drives_dialog_draws() {
+        let t = crate::dialog::Target {
+            id: 101,
+            name: "immich".into(),
+            kind: Kind::Qemu,
+            node: "pve".into(),
+            maxmem: 0,
+            used: 0,
+            template: false,
+        };
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Disks { t: t.clone(), list: None, sel: 0, ask: None, text: String::new() });
+        assert!(text(&render(&a)).contains("reading..."));
+        a.dialog = Some(Dialog::Disks {
+            t,
+            list: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]),
+            sel: 0,
+            ask: Some('m'),
+            text: "tank".into(),
+        });
+        let s = text(&render(&a));
+        assert!(s.contains("scsi0") && s.contains("move to storage: tank_"), "{s}");
     }
 
     #[test]
