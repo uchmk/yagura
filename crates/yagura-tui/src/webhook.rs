@@ -3,6 +3,7 @@
 //! on a thread of its own, so a slow or dead endpoint never stops the screen.
 
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 
 /// `s` as the inside of a JSON string.
 fn escape(s: &str) -> String {
@@ -64,20 +65,75 @@ pub fn curl_args(url: &str, host: &str, alerts: &[&str], format: &str) -> Vec<St
     a
 }
 
-/// POST the new alerts on a thread of their own. A missing `curl` or a failed request is dropped.
+/// Seconds to wait before each retry of a failed POST.
+const RETRY_AFTER: [u64; 2] = [5, 30];
+
+/// What the last send that gave up said; `take_failure` hands it to the screen once.
+static FAILURE: Mutex<Option<String>> = Mutex::new(None);
+
+/// The one line that says why a send failed: curl's own message when it printed one, else its exit code.
+pub fn failure_text(code: Option<i32>, stderr: &str) -> String {
+    let line = stderr.lines().map(str::trim).find(|l| !l.is_empty());
+    match (line, code) {
+        (Some(l), _) => l.trim_start_matches("curl: ").chars().take(120).collect(),
+        (None, Some(c)) => format!("curl exited with {c}"),
+        (None, None) => "curl was stopped".to_string(),
+    }
+}
+
+/// The failure of a send that used up its retries, once; `None` when there is nothing new.
+pub fn take_failure() -> Option<String> {
+    FAILURE.lock().ok().and_then(|mut f| f.take())
+}
+
+/// POST the new alerts on a thread of their own. A failed request is tried again after 5 s and 30 s; when the last try
+/// fails too, `take_failure` says why. A missing `curl` counts as a failure.
 pub fn send(url: &str, host: &str, alerts: &[&str], format: &str) {
     if !valid_url(url) || alerts.is_empty() {
         return;
     }
     let args = curl_args(url, host, alerts, format);
     let _ = std::thread::Builder::new().name("yagura-webhook".into()).spawn(move || {
-        let _ = Command::new("curl").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let mut why = String::new();
+        for wait in std::iter::once(0).chain(RETRY_AFTER) {
+            std::thread::sleep(std::time::Duration::from_secs(wait));
+            match Command::new("curl").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).output() {
+                Ok(o) if o.status.success() => return,
+                Ok(o) => why = failure_text(o.status.code(), &String::from_utf8_lossy(&o.stderr)),
+                Err(e) => why = format!("cannot run curl: {e}"),
+            }
+        }
+        if let Ok(mut f) = FAILURE.lock() {
+            *f = Some(why);
+        }
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_send_says_why_in_one_line() {
+        assert_eq!(
+            failure_text(
+                Some(6),
+                "curl: (6) Could not resolve host: x
+"
+            ),
+            "(6) Could not resolve host: x"
+        );
+        assert_eq!(
+            failure_text(
+                Some(22),
+                "  
+"
+            ),
+            "curl exited with 22"
+        );
+        assert_eq!(failure_text(None, ""), "curl was stopped");
+        assert_eq!(failure_text(Some(1), &"x".repeat(300)).len(), 120);
+    }
 
     #[test]
     fn the_body_carries_the_alerts_as_escaped_json() {

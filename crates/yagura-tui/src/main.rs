@@ -1707,6 +1707,9 @@ fn prefetch(app: &mut App, tx: &Sender<Job>) {
 /// Announce alerts that were not there a moment ago: a status line and, unless switched off, the terminal bell.
 fn watch_alerts(app: &mut App) {
     use std::io::Write;
+    if let Some(why) = webhook::take_failure() {
+        app.status = format!("webhook failed after 3 tries: {why}");
+    }
     let now = model::unix_now();
     let cur = app.model.alerts(now);
     let new: Vec<&str> = cur.iter().filter(|(k, _)| !app.alerts_seen.contains(k)).map(|(_, t)| t.as_str()).collect();
