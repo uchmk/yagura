@@ -1184,6 +1184,39 @@ pub fn parse_fw_rules(json: &str) -> Vec<FwRule> {
     out
 }
 
+/// The lines for one firewall level (`cluster` or a node): whether it is on, the default policies, then its rules in order.
+pub fn parse_fw_level(scope: &str, options: &str, rules: &str) -> Vec<String> {
+    let o: Value = serde_json::from_str(options).unwrap_or(Value::Null);
+    let on = parse_fw_options(options);
+    let pol = |k: &str| o[k].as_str().unwrap_or("default").to_string();
+    let mut out =
+        vec![format!("{scope} firewall {}  policy in {}, out {}", if on { "ON" } else { "OFF" }, pol("policy_in"), pol("policy_out"))];
+    let r = parse_fw_rules(rules);
+    if r.is_empty() {
+        out.push("  no rules".into());
+    }
+    for x in r {
+        out.push(format!("  {:>2}  {}{}", x.pos, if x.enabled { "" } else { "off  " }, x.line));
+    }
+    out
+}
+
+/// The cluster firewall and this node's firewall with their rules (read-only `pvesh`).
+pub fn host_firewall() -> Vec<String> {
+    let node = this_node();
+    let get = |p: &str| pvesh(p, &[]).unwrap_or_default();
+    let mut out = parse_fw_level("cluster", &get("/cluster/firewall/options"), &get("/cluster/firewall/rules"));
+    if !node.is_empty() {
+        out.push(String::new());
+        out.extend(parse_fw_level(
+            &format!("node {node}"),
+            &get(&format!("/nodes/{node}/firewall/options")),
+            &get(&format!("/nodes/{node}/firewall/rules")),
+        ));
+    }
+    out
+}
+
 fn fw_path(node: &str, kind: Kind, id: u32) -> String {
     format!("/nodes/{node}/{}/{id}/firewall", if kind == Kind::Lxc { "lxc" } else { "qemu" })
 }
@@ -1397,6 +1430,19 @@ mod tests {
             assert!(backup_job_save_cmd(None, &bad).is_err(), "{bad:?}");
         }
         assert_eq!(backup_job_delete_cmd("backup-1").args, ["delete", "/cluster/backup/backup-1"]);
+    }
+
+    #[test]
+    fn a_firewall_level_shows_state_policy_and_rules() {
+        let o = r#"{"enable":1,"policy_in":"DROP","policy_out":"ACCEPT"}"#;
+        let r = r#"[{"pos":1,"type":"in","action":"ACCEPT","proto":"tcp","dport":"22","enable":1},
+                    {"pos":0,"type":"in","action":"ACCEPT","macro":"Ping","enable":0,"comment":"ping"}]"#;
+        let l = parse_fw_level("cluster", o, r);
+        assert_eq!(l[0], "cluster firewall ON  policy in DROP, out ACCEPT");
+        assert_eq!(l[1], "   0  off  in ACCEPT Ping # ping");
+        assert_eq!(l[2], "   1  in ACCEPT tcp dport 22");
+        let l = parse_fw_level("node pve", "{}", "[]");
+        assert_eq!(l, ["node pve firewall OFF  policy in default, out default", "  no rules"]);
     }
 
     #[test]

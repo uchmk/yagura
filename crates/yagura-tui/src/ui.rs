@@ -705,7 +705,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x  f    clean up old snapshots and backups / stop a task (Tasks) (asks first) / step the Tasks filter (failed, running, 24 h, 7 d)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, U package updates, V refresh them, K certificates, D disks and SMART;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1926,6 +1926,15 @@ mod tests {
         let s = text(&render(&a));
         assert!(s.contains("show: failed") && s.contains("find: VZDUMP"), "{s}");
         assert_eq!(TaskFilter::Week.next(), TaskFilter::All);
+    }
+
+    #[test]
+    fn the_host_firewall_page_draws() {
+        let mut a = app(View::Host);
+        let lines = vec!["cluster firewall OFF  policy in default, out default".to_string(), "  no rules".to_string()];
+        a.dialog = Some(Dialog::Text { title: "cluster and node firewall".into(), lines: Some(lines), top: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("cluster and node firewall") && s.contains("firewall OFF") && s.contains("no rules"), "{s}");
     }
 
     #[test]
