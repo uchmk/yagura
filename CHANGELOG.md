@@ -6,6 +6,12 @@
 
 ## [未リリース]
 
+## [0.73.101] - 2026-10-28
+
+### 追加
+
+- yagura-tui: Webhook に送る警告の種類を絞れる。`tui.toml` の `webhook_kinds = ["storage", "vzdump"]`（または `"storage, vzdump"`）か環境変数 `YAGURA_WEBHOOK_KINDS`。種類は `storage`・`pool`・`temp`・`vzdump`・`failed`・`stale`。空（既定）なら今までどおり全部送る。画面の警告とベルは絞らない。
+
 ## [0.73.100] - 2026-10-28
 
 ### 追加

@@ -20,6 +20,8 @@ pub struct Config {
     pub mem_full: f64,
     /// POST new alerts as JSON to this address (empty: off).
     pub webhook: String,
+    /// Only these kinds of alert are POSTed (`storage`, `pool`, `temp`, `vzdump`, `failed`, `stale`); empty: all of them.
+    pub webhook_kinds: Vec<String>,
     /// Ring the terminal bell when a new alert appears.
     pub bell: bool,
     /// The cleanup keeps this many of the newest backups of each guest.
@@ -38,6 +40,7 @@ impl Default for Config {
             cpu_hot: 90.0,
             mem_full: 90.0,
             webhook: String::new(),
+            webhook_kinds: vec![],
             bell: true,
             keep_backups: 3,
             snapshot_days: 30,
@@ -72,6 +75,13 @@ impl Config {
         if let Some(v) = t.get("webhook").and_then(|v| v.as_str()) {
             c.webhook = v.trim().to_string();
         }
+        if let Some(v) = t.get("webhook_kinds") {
+            c.webhook_kinds = match (v.as_str(), v.as_array()) {
+                (Some(s), _) => kinds(s),
+                (_, Some(a)) => kinds(&a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(",")),
+                _ => vec![],
+            };
+        }
         if let Some(v) = t.get("bell").and_then(|v| v.as_bool()) {
             c.bell = v;
         }
@@ -105,6 +115,9 @@ impl Config {
         if let Some(v) = num("YAGURA_MEM_FULL").filter(|v| *v > 0.0) {
             self.mem_full = v;
         }
+        if let Some(v) = get("YAGURA_WEBHOOK_KINDS") {
+            self.webhook_kinds = kinds(&v);
+        }
         if let Some(v) = get("YAGURA_WEBHOOK") {
             self.webhook = v.trim().to_string();
         }
@@ -119,6 +132,11 @@ impl Config {
         }
         self
     }
+}
+
+/// A comma- or blank-separated list of alert kinds, in lower case.
+fn kinds(s: &str) -> Vec<String> {
+    s.split(|c: char| c == ',' || c.is_whitespace()).filter(|k| !k.is_empty()).map(|k| k.to_ascii_lowercase()).collect()
 }
 
 /// Where the file is looked for.
@@ -170,6 +188,12 @@ mem_full = 0
         assert_eq!(c.webhook, "https://x/h");
         let c = c.with_env(|k| (k == "YAGURA_WEBHOOK").then(String::new));
         assert_eq!(c.webhook, "");
+        let c = Config::from_toml("webhook_kinds = [\"Storage\", \"vzdump\"]\n");
+        assert_eq!(c.webhook_kinds, ["storage", "vzdump"]);
+        let c = Config::from_toml("webhook_kinds = \"temp, pool\"\n");
+        assert_eq!(c.webhook_kinds, ["temp", "pool"]);
+        let c = c.with_env(|k| (k == "YAGURA_WEBHOOK_KINDS").then(String::new));
+        assert!(c.webhook_kinds.is_empty());
         let c = Config::from_toml("keep_backups = 5\nsnapshot_days = 0\n");
         assert_eq!((c.keep_backups, c.snapshot_days), (5, 30));
         let c = c.with_env(|k| (k == "YAGURA_SNAPSHOT_DAYS").then(|| "14".to_string()));

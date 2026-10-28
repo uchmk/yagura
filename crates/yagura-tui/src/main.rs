@@ -1537,7 +1537,13 @@ fn watch_alerts(app: &mut App) {
     let new: Vec<&str> = cur.iter().filter(|(k, _)| !app.alerts_seen.contains(k)).map(|(_, t)| t.as_str()).collect();
     if !new.is_empty() {
         app.status = format!("ALERT: {}", new.join("; "));
-        webhook::send(&config::get().webhook, &app.model.host, &new);
+        let cfg = config::get();
+        let sent: Vec<&str> = cur
+            .iter()
+            .filter(|(k, _)| !app.alerts_seen.contains(k) && webhook::wanted(&cfg.webhook_kinds, k))
+            .map(|(_, t)| t.as_str())
+            .collect();
+        webhook::send(&cfg.webhook, &app.model.host, &sent);
         if config::get().bell {
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x07");

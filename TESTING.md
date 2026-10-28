@@ -373,6 +373,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.77 | `B` on a guest opens its boot options (start at boot, order, up/down delay), filled from the config; empty numbers delete `startup`; y/n is asked last. |
 | 3p.78 | `e` in the Storage view edits content and enabled of the storage under the cursor (empty keeps it); disabling shows a red warning, and y/n is asked last. |
 | 3p.79 | `I` in the host screen counts the waiting updates, then asks y/n (red: a restart may be needed) before `apt-get dist-upgrade -y` on this node. |
+| 3p.80 | `webhook_kinds` in tui.toml (or YAGURA_WEBHOOK_KINDS) limits which alert kinds are POSTed; empty sends all; the screen and bell still show every alert. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

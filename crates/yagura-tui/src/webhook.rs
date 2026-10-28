@@ -21,6 +21,12 @@ fn escape(s: &str) -> String {
     o
 }
 
+/// Whether the alert with this key (`storage nas`, `vzdump UPID…`, `temp`) is of a kind to send; no kinds listed means all.
+pub fn wanted(kinds: &[String], key: &str) -> bool {
+    let kind = key.split(' ').next().unwrap_or("");
+    kinds.is_empty() || kinds.iter().any(|k| k == kind)
+}
+
 /// The JSON body for the new alerts of `host`.
 pub fn payload(host: &str, alerts: &[&str]) -> String {
     let text = escape(&format!("yagura {host}: {}", alerts.join("; ")));
@@ -58,6 +64,16 @@ mod tests {
     fn the_body_carries_the_alerts_as_escaped_json() {
         assert_eq!(payload("pve", &["a \"b\"", "c\\d"]), r#"{"text":"yagura pve: a \"b\"; c\\d","content":"yagura pve: a \"b\"; c\\d"}"#);
         assert_eq!(escape("x\ny\u{1}"), "x\\ny\\u0001");
+    }
+
+    #[test]
+    fn alerts_are_filtered_by_kind() {
+        let k = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(wanted(&[], "storage nas"));
+        assert!(wanted(&k(&["storage", "temp"]), "storage nas"));
+        assert!(wanted(&k(&["temp"]), "temp"));
+        assert!(!wanted(&k(&["storage"]), "vzdump UPID:pve:1"));
+        assert!(!wanted(&k(&["stale"]), "failed 101 5"));
     }
 
     #[test]
