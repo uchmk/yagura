@@ -146,7 +146,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  U (host) package updates, V refresh the lists  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -581,6 +581,10 @@ fn run(
             KeyCode::Char('Z') if app.view == View::Host => open_pools(app, jobs_tx),
             KeyCode::Char('P') if app.view == View::Host => open_services(app, jobs_tx),
             KeyCode::Char('X') if app.view == View::Host => open_node_settings(app, jobs_tx),
+            KeyCode::Char('U') if app.view == View::Host => open_apt(app, jobs_tx),
+            KeyCode::Char('V') if app.view == View::Host => {
+                app.dialog = Some(dialog::Dialog::Sure(dialog::sure_apt_refresh(&proxmox::ops::this_node())));
+            }
             _ => {}
         }
     }
@@ -966,6 +970,20 @@ fn open_services(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Services(node, list));
         })
         .expect("spawn the services thread");
+}
+
+/// `U` in the host screen: the package updates waiting on this node (read only); `V` refreshes the lists (asks first).
+fn open_apt(app: &mut App, tx: &Sender<Job>) {
+    const TITLE: &str = "package updates";
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Text { title: TITLE.into(), lines: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-apt".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Text(TITLE, proxmox::ops::apt_updates()));
+        })
+        .expect("spawn the apt thread");
 }
 
 /// `X` in the host screen: this node's clock, DNS and hosts file (read only).

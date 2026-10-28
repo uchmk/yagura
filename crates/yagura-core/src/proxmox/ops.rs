@@ -775,6 +775,36 @@ pub fn node_settings() -> Vec<String> {
     parse_node_settings(&get("time"), &get("dns"), &get("hosts"))
 }
 
+/// The lines of the update page from `/nodes/<n>/apt/update`: every package with a newer version waiting.
+pub fn parse_apt(json: &str) -> Vec<String> {
+    let v: Value = serde_json::from_str(json).unwrap_or(Value::Null);
+    let Some(a) = v.as_array() else { return vec![] };
+    let s = |x: &Value, k: &str| x[k].as_str().unwrap_or("?").to_string();
+    let mut out = vec![format!("updates waiting ({})", a.len())];
+    for x in a {
+        out.push(format!("  {}  {} -> {}", s(x, "Package"), s(x, "OldVersion"), s(x, "Version")));
+    }
+    if a.is_empty() {
+        out.push("  none; V asks the node to look again (apt update)".into());
+    }
+    out
+}
+
+/// This node's waiting updates (read-only `pvesh`; it shows the list from the last `apt update`).
+pub fn apt_updates() -> Vec<String> {
+    let node = this_node();
+    if node.is_empty() {
+        return vec![];
+    }
+    pvesh(&format!("/nodes/{node}/apt/update"), &[]).map(|j| parse_apt(&j)).unwrap_or_default()
+}
+
+/// `pvesh create /nodes/<n>/apt/update`: refreshes the package lists (an `apt update`); it answers with a task.
+pub fn apt_refresh_cmd(node: &str) -> Cmd {
+    let ok = !node.is_empty() && node.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    Cmd::new("pvesh", &["create", &format!("/nodes/{}/apt/update", if ok { node } else { "invalid" })])
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -1200,6 +1230,18 @@ mod tests {
             assert!(backup_job_save_cmd(None, &bad).is_err(), "{bad:?}");
         }
         assert_eq!(backup_job_delete_cmd("backup-1").args, ["delete", "/cluster/backup/backup-1"]);
+    }
+
+    #[test]
+    fn apt_updates_are_listed_and_refreshed() {
+        let l = parse_apt(
+            r#"[{"Package":"pve-manager","OldVersion":"8.2.2","Version":"8.2.4","Title":"x"},{"Package":"curl","Version":"8.1"}]"#,
+        );
+        assert_eq!(l, ["updates waiting (2)", "  pve-manager  8.2.2 -> 8.2.4", "  curl  ? -> 8.1"]);
+        assert!(parse_apt("[]")[1].contains("none"));
+        assert!(parse_apt("x").is_empty());
+        assert_eq!(apt_refresh_cmd("pve1").args, ["create", "/nodes/pve1/apt/update"]);
+        assert_eq!(apt_refresh_cmd("a/b").args, ["create", "/nodes/invalid/apt/update"]);
     }
 
     #[test]

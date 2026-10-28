@@ -509,6 +509,18 @@ pub fn sure_job(j: &ops::BackupJob) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label: format!("job {}", j.id), cmds: vec![ops::backup_job_cmd(&j.id, on)] }, lines }
 }
 
+/// The last question for refreshing this node's package lists.
+pub fn sure_apt_refresh(node: &str) -> Sure {
+    Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: "apt update".into(), cmds: vec![ops::apt_refresh_cmd(node)] },
+        lines: vec![
+            (format!("refresh the package lists of {node} (apt update)"), false),
+            ("nothing is installed; U lists what is waiting afterwards".into(), false),
+        ],
+    }
+}
+
 /// The last question for running a backup job once, now.
 pub fn sure_job_run(j: &ops::BackupJob, fallback: &str) -> Sure {
     let lines = vec![

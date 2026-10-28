@@ -357,6 +357,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.61 | `P` on the Host screen lists this node's services with their state; Enter asks y/n (a red line for pveproxy, pvedaemon, pve-cluster, corosync, sshd, networking) before `pvesh create .../services/<name>/restart`. `X` shows the node's time zone, DNS and hosts file, read only. |
 | 3p.62 | In the services dialog (`P`), `s`, `x` and `l` ask y/n before start, stop and reload of the service under the cursor; stopping pveproxy, pvedaemon, pve-cluster, corosync, sshd or networking adds a red line. |
 | 3p.63 | `r` in the backup-jobs dialog (`J`) asks y/n, then starts the job's guests, storage and mode once as a vzdump task that shows in the Tasks screen, even when the job is off. |
+| 3p.64 | `U` in the host screen lists the waiting package updates; `V` asks y/n, then refreshes the package lists as a task (nothing is installed). |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

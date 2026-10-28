@@ -666,7 +666,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, U package updates, V refresh them;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1844,6 +1844,15 @@ mod tests {
         a.dialog = Some(Dialog::Text { title: "replication".into(), lines: Some(lines), top: 0 });
         let s = text(&render(&a));
         assert!(s.contains("replication jobs (1)") && s.contains("pve1 -> pve2") && s.contains("FAILING x2"), "{s}");
+    }
+
+    #[test]
+    fn the_updates_page_draws() {
+        let mut a = app(View::Host);
+        let lines = vec!["updates waiting (1)".to_string(), "  curl  8.0 -> 8.1".to_string()];
+        a.dialog = Some(Dialog::Text { title: "package updates".into(), lines: Some(lines), top: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("package updates") && s.contains("curl  8.0 -> 8.1"), "{s}");
     }
 
     #[test]
