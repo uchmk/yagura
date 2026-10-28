@@ -12,6 +12,10 @@
 
 - yagura-tui: ゲストの画面で `O` がカーソルのゲストを HA に入れ（`pvesh create /cluster/ha/resources --sid vm:ID|ct:ID --state started`）、`Q` が HA から外す（`pvesh delete /cluster/ha/resources/<sid>`。ゲスト自体は止めない）。どちらも y/n で聞き、外すほうは赤字。テンプレートは対象外。
 
+### 変更
+
+- 実機（x64）の実行の報告を足した。印の変わった行は無い（#89）。
+
 ## [0.73.93] - 2026-10-28
 
 ### 追加
