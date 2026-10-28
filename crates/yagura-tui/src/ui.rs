@@ -163,7 +163,7 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 }
             }
             l.push(Line::raw(""));
-            l.push(Line::styled("j/k move  Enter restart (asks first)  Esc close", DIM));
+            l.push(Line::styled("j/k move  Enter restart  s start  x stop  l reload (each asks first)  Esc close", DIM));
             (format!(" services on {node} "), l)
         }
         Dialog::Text { title, lines, top } => {
@@ -1863,7 +1863,14 @@ mod tests {
         a.dialog =
             Some(Dialog::Services { node: "pve1".into(), list: Some(vec![sv("pveproxy", "running"), sv("cron", "stopped")]), sel: 0 });
         let s = text(&render(&a));
-        assert!(s.contains("services on pve1") && s.contains("pveproxy") && s.contains("stopped") && s.contains("Enter restart"), "{s}");
+        assert!(
+            s.contains("services on pve1")
+                && s.contains("pveproxy")
+                && s.contains("stopped")
+                && s.contains("Enter restart")
+                && s.contains("x stop"),
+            "{s}"
+        );
     }
 
     #[test]

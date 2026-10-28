@@ -482,15 +482,16 @@ pub fn sure_ha(r: &ops::HaRes) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label: format!("ha {}", r.sid), cmds: vec![ops::ha_cmd(&r.sid, on)] }, lines }
 }
 
-/// The last question for restarting one service of a node.
-pub fn sure_service(node: &str, s: &ops::Service) -> Sure {
-    let mut lines = vec![(format!("restart {} on {node} (now {})", s.name, s.state), false)];
-    if matches!(s.name.as_str(), "pveproxy" | "pvedaemon" | "pve-cluster" | "corosync" | "sshd" | "networking") {
-        lines.push(("the web interface or the connection to the cluster can drop for a moment".into(), true));
+/// The last question for starting, stopping, restarting or reloading one service of a node.
+pub fn sure_service(node: &str, s: &ops::Service, action: &str) -> Sure {
+    let mut lines = vec![(format!("{action} {} on {node} (now {})", s.name, s.state), false)];
+    if matches!(s.name.as_str(), "pveproxy" | "pvedaemon" | "pve-cluster" | "corosync" | "sshd" | "networking") && action != "start" {
+        let what = if action == "stop" { "stays unreachable until it is started again from a shell" } else { "can drop for a moment" };
+        lines.push((format!("the web interface or the connection to the cluster {what}"), true));
     }
     Sure {
         t: Target::none(),
-        op: Op::Cmds { label: format!("restart {}", s.name), cmds: vec![ops::service_restart_cmd(node, &s.name)] },
+        op: Op::Cmds { label: format!("{action} {}", s.name), cmds: vec![ops::service_cmd(node, &s.name, action)] },
         lines,
     }
 }
@@ -781,9 +782,15 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
                 KeyCode::Char('j') | KeyCode::Down => sel = (sel + 1).min(n.saturating_sub(1)),
                 KeyCode::Char('k') | KeyCode::Up => sel = sel.saturating_sub(1),
-                KeyCode::Enter | KeyCode::Char('r') => {
+                KeyCode::Enter | KeyCode::Char('r') | KeyCode::Char('s') | KeyCode::Char('x') | KeyCode::Char('l') => {
+                    let action = match code {
+                        KeyCode::Char('s') => "start",
+                        KeyCode::Char('x') => "stop",
+                        KeyCode::Char('l') => "reload",
+                        _ => "restart",
+                    };
                     if let Some(s) = list.as_ref().and_then(|l| l.get(sel)) {
-                        return (Some(Dialog::Sure(sure_service(&node, s))), Next::Nothing);
+                        return (Some(Dialog::Sure(sure_service(&node, s, action))), Next::Nothing);
                     }
                 }
                 _ => {}
@@ -1264,9 +1271,16 @@ mod tests {
         let (d, _) = key(d, KeyCode::Char('j'), none);
         let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
         let Some(Dialog::Sure(s)) = d else { panic!("no question") };
-        assert_eq!(s.op, Op::Cmds { label: "restart pveproxy".into(), cmds: vec![ops::service_restart_cmd("pve1", "pveproxy")] });
+        assert_eq!(s.op, Op::Cmds { label: "restart pveproxy".into(), cmds: vec![ops::service_cmd("pve1", "pveproxy", "restart")] });
         assert!(s.lines.iter().any(|l| l.1));
-        assert!(!sure_service("pve1", &sv("cron")).lines.iter().any(|l| l.1));
+        assert!(!sure_service("pve1", &sv("cron"), "restart").lines.iter().any(|l| l.1));
+        assert!(!sure_service("pve1", &sv("pveproxy"), "start").lines.iter().any(|l| l.1));
+        for (c, a) in [('s', "start"), ('x', "stop"), ('l', "reload")] {
+            let d = Dialog::Services { node: "pve1".into(), list: Some(vec![sv("cron")]), sel: 0 };
+            let (d, _) = key(d, KeyCode::Char(c), none);
+            let Some(Dialog::Sure(s)) = d else { panic!("no question for {a}") };
+            assert_eq!(s.op, Op::Cmds { label: format!("{a} cron"), cmds: vec![ops::service_cmd("pve1", "cron", a)] });
+        }
         let (d, _) = key(Dialog::Services { node: "n".into(), list: None, sel: 0 }, KeyCode::Enter, none);
         assert!(matches!(d, Some(Dialog::Services { .. })));
     }

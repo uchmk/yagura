@@ -702,11 +702,13 @@ pub fn services() -> (String, Vec<Service>) {
     (node, list)
 }
 
-/// `pvesh create /nodes/<n>/services/<name>/restart`; the names are letters, digits and `-_.@` only.
-pub fn service_restart_cmd(node: &str, name: &str) -> Cmd {
+/// `pvesh create /nodes/<n>/services/<name>/<action>` (`start`, `stop`, `restart` or `reload`); the names are letters,
+/// digits and `-_.@` only.
+pub fn service_cmd(node: &str, name: &str, action: &str) -> Cmd {
     let safe = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.@".contains(c));
-    let (node, name) = if safe(node) && safe(name) { (node, name) } else { ("invalid", "invalid") };
-    Cmd::new("pvesh", &["create", &format!("/nodes/{node}/services/{name}/restart")])
+    let ok = safe(node) && safe(name) && ["start", "stop", "restart", "reload"].contains(&action);
+    let (node, name, action) = if ok { (node, name, action) } else { ("invalid", "invalid", "invalid") };
+    Cmd::new("pvesh", &["create", &format!("/nodes/{node}/services/{name}/{action}")])
 }
 
 /// The lines of the node page: the clock (`/nodes/<n>/time`), the resolver (`/dns`) and the hosts file (`/hosts`).
@@ -1170,8 +1172,10 @@ mod tests {
         assert_eq!((l[0].name.as_str(), l[0].state.as_str(), l[0].desc.as_str()), ("pveproxy", "running", "PVE API Proxy Server"));
         assert_eq!(l[1].name, "cron");
         assert!(parse_services("x").is_empty());
-        assert_eq!(service_restart_cmd("pve1", "pveproxy").args, ["create", "/nodes/pve1/services/pveproxy/restart"]);
-        assert_eq!(service_restart_cmd("pve1", "a/../b").args, ["create", "/nodes/invalid/services/invalid/restart"]);
+        assert_eq!(service_cmd("pve1", "pveproxy", "restart").args, ["create", "/nodes/pve1/services/pveproxy/restart"]);
+        assert_eq!(service_cmd("pve1", "cron", "stop").args, ["create", "/nodes/pve1/services/cron/stop"]);
+        assert_eq!(service_cmd("pve1", "a/../b", "restart").args, ["create", "/nodes/invalid/services/invalid/invalid"]);
+        assert_eq!(service_cmd("pve1", "cron", "rm -rf").args, ["create", "/nodes/invalid/services/invalid/invalid"]);
         let s = parse_node_settings(
             r#"{"timezone":"Asia/Tokyo","time":1000,"localtime":33400}"#,
             r#"{"search":"lan","dns1":"192.168.0.1"}"#,

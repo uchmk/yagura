@@ -146,7 +146,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services  X (host) time, DNS and hosts  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
