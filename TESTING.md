@@ -352,6 +352,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.56 | `A` on the Host screen opens a read-only page of the cluster's users (on/off, expiry, groups) with their API tokens, then the permissions (path, role, user/group/token); OFF and EXPIRED are red; j/k, Space, g/G scroll and Esc closes. |
 | 3p.57 | `E` on the Host screen lists the HA resources (wanted state, live state and node, group; error/fence/recovery in red); Enter asks y/n and then `pvesh set /cluster/ha/resources/<sid> --state` switches it between started and disabled (turning it off carries a red warning). |
 | 3p.58 | `R` on the Host screen lists the replication jobs (source -> target, schedule, rate limit, last and next sync); a job whose last runs failed shows `FAILING xN: error` in red, a disabled one `OFF`; read only. |
+| 3p.59 | `Z` on the Host screen lists this node's ZFS pools (state, use, fragmentation) and the Ceph cluster's health (checks, use, OSDs up); anything not ONLINE / HEALTH_OK shows `UNHEALTHY` in red; with neither present it says nothing could be read. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

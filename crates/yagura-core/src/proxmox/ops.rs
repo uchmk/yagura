@@ -559,6 +559,68 @@ pub fn replication(now: u64) -> Vec<String> {
     parse_replication(&jobs, &rows, now)
 }
 
+/// The lines of the pool screen: the ZFS pools of `/nodes/<n>/disks/zfs` and the Ceph cluster of `/cluster/ceph/status`.
+/// A pool or cluster that is not healthy has `UNHEALTHY` on its line (shown in red).
+pub fn parse_pools(zfs: &str, ceph: &str) -> Vec<String> {
+    let mut out = vec![];
+    let list = serde_json::from_str::<Value>(zfs).ok().and_then(|v| v.as_array().cloned());
+    if let Some(pools) = list {
+        out.push(format!("zfs pools ({})", pools.len()));
+        for p in &pools {
+            let s = |k: &str| p[k].as_str().unwrap_or("?").to_string();
+            let n = |k: &str| p[k].as_u64().unwrap_or(0);
+            let size = n("size");
+            let used = (n("alloc") * 100).checked_div(size).unwrap_or(0);
+            let health = s("health");
+            let bad = if health == "ONLINE" { "" } else { "  UNHEALTHY" };
+            out.push(format!("  {:<14} {health}{bad}  {used}% of {}  frag {}%", s("name"), human(size), n("frag")));
+        }
+    }
+    if let Some(c) = serde_json::from_str::<Value>(ceph).ok().filter(|c| c["health"].is_object()) {
+        let st = c["health"]["status"].as_str().unwrap_or("?");
+        let bad = if st == "HEALTH_OK" { "" } else { "  UNHEALTHY" };
+        out.push(String::new());
+        out.push(format!("ceph {st}{bad}"));
+        if let Some(checks) = c["health"]["checks"].as_object() {
+            for (k, v) in checks {
+                let msg = v["summary"]["message"].as_str().unwrap_or("");
+                let sev = v["severity"].as_str().unwrap_or("");
+                out.push(format!("  {k}: {msg}  ({sev}){}", if sev == "HEALTH_ERR" { "  UNHEALTHY" } else { "" }));
+            }
+        }
+        let pg = &c["pgmap"];
+        if let (Some(used), Some(total)) = (pg["bytes_used"].as_u64(), pg["bytes_total"].as_u64()) {
+            out.push(format!("  used {} of {}", human(used), human(total)));
+        }
+        let osd = &c["osdmap"];
+        if let (Some(up), Some(all)) = (osd["num_up_osds"].as_u64(), osd["num_osds"].as_u64()) {
+            out.push(format!("  osds {up} up of {all}"));
+        }
+    }
+    out
+}
+
+/// 1.5 TiB / 20 GiB.
+fn human(b: u64) -> String {
+    const U: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut v = b as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{b} B") } else { format!("{v:.1} {}", U[i]) }
+}
+
+/// The ZFS pools of this node and the Ceph cluster, if there are any (read-only `pvesh`).
+pub fn pools() -> Vec<String> {
+    let node = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+    let node = node.trim();
+    let zfs = if node.is_empty() { String::new() } else { pvesh(&format!("/nodes/{node}/disks/zfs"), &[]).unwrap_or_default() };
+    let ceph = pvesh("/cluster/ceph/status", &[]).unwrap_or_default();
+    parse_pools(&zfs, &ceph)
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -933,6 +995,27 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pools_show_zfs_and_ceph_health() {
+        let zfs = r#"[{"name":"rpool","health":"ONLINE","size":1073741824000,"alloc":536870912000,"frag":3},{"name":"tank","health":"DEGRADED","size":0,"alloc":0}]"#;
+        let ceph = r#"{"health":{"status":"HEALTH_WARN","checks":{"OSD_DOWN":{"severity":"HEALTH_WARN","summary":{"message":"1 osds down"}}}},"pgmap":{"bytes_used":1073741824,"bytes_total":10737418240},"osdmap":{"num_up_osds":2,"num_osds":3}}"#;
+        let l = parse_pools(zfs, ceph);
+        assert_eq!(l[0], "zfs pools (2)");
+        assert!(
+            l[1].contains("rpool") && l[1].contains("ONLINE") && !l[1].contains("UNHEALTHY") && l[1].contains("50% of 1000.0 GiB"),
+            "{l:?}"
+        );
+        assert!(l[2].contains("DEGRADED  UNHEALTHY"), "{l:?}");
+        assert_eq!(l[4], "ceph HEALTH_WARN  UNHEALTHY");
+        assert!(l[5].contains("OSD_DOWN: 1 osds down") && !l[5].contains("UNHEALTHY"), "{l:?}");
+        assert_eq!(l[6], "  used 1.0 GiB of 10.0 GiB");
+        assert_eq!(l[7], "  osds 2 up of 3");
+        assert!(parse_pools("x", "{}").is_empty());
+        let ok = parse_pools("[]", r#"{"health":{"status":"HEALTH_OK"}}"#);
+        assert_eq!(ok, ["zfs pools (0)", "", "ceph HEALTH_OK"]);
+        assert_eq!(human(512), "512 B");
+    }
 
     #[test]
     fn replication_jobs_show_their_last_run() {

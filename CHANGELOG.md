@@ -6,6 +6,13 @@
 
 ## [未リリース]
 
+## [0.73.79] - 2026-10-28
+
+### 追加
+
+- yagura-tui: ホスト画面で `Z` を押すと、この機械の ZFS プール（`pvesh get /nodes/<node>/disks/zfs`）と Ceph クラスター（`/cluster/ceph/status`）の健康状態を一覧する。
+  - ZFS はプールごとに状態・使用率・断片化。Ceph は `HEALTH_*`・出ている警告・使用量・OSD の数。ONLINE / HEALTH_OK でないものは `UNHEALTHY` を付けて赤字で出す。どちらも無ければ「読めなかった」と出る。読み取りだけ。
+
 ## [0.73.78] - 2026-10-28
 
 ### 追加
