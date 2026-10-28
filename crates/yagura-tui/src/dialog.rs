@@ -579,6 +579,24 @@ pub fn sure_resize(t: &Target, disks: &[(String, String)], sel: usize, gib: &str
     })
 }
 
+/// The last question for changing one option of the selected disk: `d` discard, `s` ssd, `c` cache (see `ops::disk_option_cmd`).
+pub fn sure_disk_option(t: &Target, disks: &[(String, String)], sel: usize, key: char) -> Result<Sure, String> {
+    let (k, value) = disks.get(sel).ok_or("no disk")?;
+    let opt = match key {
+        'd' => "discard",
+        's' => "ssd",
+        _ => "cache",
+    };
+    let (new, said, cmd) = ops::disk_option_cmd(t.kind, t.id, k, value, opt)?;
+    let lines = vec![
+        (format!("{said} on {k} of {} {}", t.id, t.name), false),
+        (format!("  now {value}"), false),
+        (format!("  new {new}"), false),
+        ("a running VM takes the change after its next stop and start".into(), false),
+    ];
+    Ok(Sure { t: t.clone(), op: Op::Cmds { label: format!("{k}: {said}"), cmds: vec![cmd] }, lines })
+}
+
 /// The last question for adding a disk of `gib` GiB on the storage of the selected disk (`disks[sel]`); `keys` are all config keys.
 pub fn sure_disk_add(t: &Target, disks: &[(String, String)], keys: &[String], sel: usize, gib: &str) -> Option<Sure> {
     let (_, value) = disks.get(sel)?;
@@ -1591,6 +1609,10 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 KeyCode::Enter => match sure_resize(&t, disks.as_deref().unwrap_or(&[]), sel, &gib) {
                     Some(s) => (Some(Dialog::Sure(s)), Next::Nothing),
                     None => stay(t, disks, keys, sel, gib),
+                },
+                KeyCode::Char(c @ ('d' | 's' | 'c')) => match sure_disk_option(&t, disks.as_deref().unwrap_or(&[]), sel, c) {
+                    Ok(s) => (Some(Dialog::Sure(s)), Next::Nothing),
+                    Err(_) => stay(t, disks, keys, sel, gib),
                 },
                 KeyCode::F(2) => match sure_disk_add(&t, disks.as_deref().unwrap_or(&[]), &keys, sel, &gib) {
                     Some(s) => (Some(Dialog::Sure(s)), Next::Nothing),
@@ -2743,6 +2765,16 @@ mod tests {
         let disks = vec![("scsi0".to_string(), "local-lvm:vm-101-disk-0,size=32G".to_string())];
         let keys = vec!["scsi0".to_string(), "scsi1".to_string()];
         let d = Dialog::Resize { t: target(Kind::Qemu), disks: Some(disks), keys, sel: 0, gib: String::new() };
+        let (o, _) = key(d.clone(), KeyCode::Char('d'), none);
+        let Some(Dialog::Sure(s)) = o else { panic!("no discard question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds {
+                label: "scsi0: discard on".into(),
+                cmds: vec![ops::disk_option_cmd(Kind::Qemu, 101, "scsi0", "local-lvm:vm-101-disk-0,size=32G", "discard").unwrap().2]
+            }
+        );
+        assert_eq!(s.t.id, 101, "runs on the guest's node");
         let (d, _) = key(d, KeyCode::F(2), none);
         assert!(matches!(d, Some(Dialog::Resize { .. })), "no size yet");
         let (d, _) = key(d.unwrap(), KeyCode::Char('8'), none);

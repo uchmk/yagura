@@ -2146,6 +2146,58 @@ pub fn disk_move_cmd(node: &str, kind: Kind, id: u32, key: &str, storage: &str) 
     }
 }
 
+/// A VM disk's value with the option `opt` changed to `new` (`None` removes it, which is the default). The volume stays first.
+pub fn disk_with_option(value: &str, opt: &str, new: Option<&str>) -> String {
+    let mut parts: Vec<String> =
+        value.split(',').filter(|p| !p.is_empty() && p.split('=').next() != Some(opt)).map(str::to_string).collect();
+    if let Some(n) = new {
+        parts.push(format!("{opt}={n}"));
+    }
+    parts.join(",")
+}
+
+/// The next value of the option `opt` (`discard`, `ssd` or `cache`) of a VM disk, the new disk value, and the command that sets it.
+/// `discard` and `ssd` toggle; `cache` goes none, writeback, writethrough, directsync, unsafe and back to the default.
+/// Only a VM disk has these; `ssd` is not allowed on a `virtio` disk.
+pub fn disk_option_cmd(kind: Kind, id: u32, key: &str, value: &str, opt: &str) -> Result<(String, String, Cmd), String> {
+    if kind == Kind::Lxc {
+        return Err("disk options are for VM disks".into());
+    }
+    if opt == "ssd" && key.starts_with("virtio") {
+        return Err("a virtio disk has no ssd flag".into());
+    }
+    let cur = value.split(',').find_map(|p| p.strip_prefix(&format!("{opt}=")));
+    let next: Option<&str> = match opt {
+        "discard" => {
+            if cur == Some("on") {
+                None
+            } else {
+                Some("on")
+            }
+        }
+        "ssd" => {
+            if cur == Some("1") {
+                None
+            } else {
+                Some("1")
+            }
+        }
+        "cache" => match cur {
+            None => Some("none"),
+            Some("none") => Some("writeback"),
+            Some("writeback") => Some("writethrough"),
+            Some("writethrough") => Some("directsync"),
+            Some("directsync") => Some("unsafe"),
+            _ => None,
+        },
+        _ => return Err(format!("unknown disk option {opt}")),
+    };
+    let new = disk_with_option(value, opt, next);
+    let said = format!("{opt} {}", next.unwrap_or("default"));
+    let cmd = Cmd::new("qm", &["set", &id.to_string(), &format!("--{key}"), &new]);
+    Ok((new, said, cmd))
+}
+
 /// `--delete <key>`: detaches a disk (it stays as `unusedN`), or destroys an `unusedN` volume for good.
 pub fn disk_detach_cmd(kind: Kind, id: u32, key: &str) -> Cmd {
     net_del_cmd(kind, id, key)
@@ -2518,6 +2570,24 @@ mod tests {
         assert!(r.contains(&"    subnet 10.0.20.0/24  gateway 10.0.20.1  snat".to_string()), "{r:?}");
         assert!(r.contains(&"zone ov  type vxlan".to_string()) && r.last().unwrap().contains("lost"), "{r:?}");
         assert!(sdn_report("[]", "[]", &[])[1].contains("not set up"));
+    }
+
+    #[test]
+    fn disk_options_toggle_and_cycle() {
+        let v = "local-lvm:vm-100-disk-0,size=32G";
+        let (n, said, c) = disk_option_cmd(Kind::Qemu, 100, "scsi0", v, "discard").unwrap();
+        assert_eq!(n, "local-lvm:vm-100-disk-0,size=32G,discard=on");
+        assert_eq!(said, "discard on");
+        assert_eq!(c.args, ["set", "100", "--scsi0", "local-lvm:vm-100-disk-0,size=32G,discard=on"]);
+        let (n, said, _) = disk_option_cmd(Kind::Qemu, 100, "scsi0", &n, "discard").unwrap();
+        assert_eq!((n.as_str(), said.as_str()), (v, "discard default"));
+        let (n, _, _) = disk_option_cmd(Kind::Qemu, 100, "sata0", "a:b,cache=unsafe,ssd=1", "cache").unwrap();
+        assert_eq!(n, "a:b,ssd=1");
+        let (n, said, _) = disk_option_cmd(Kind::Qemu, 100, "sata0", "a:b,ssd=1", "cache").unwrap();
+        assert_eq!((n.as_str(), said.as_str()), ("a:b,ssd=1,cache=none", "cache none"));
+        assert!(disk_option_cmd(Kind::Qemu, 100, "virtio0", "a:b", "ssd").is_err());
+        assert!(disk_option_cmd(Kind::Lxc, 100, "rootfs", "a:b", "discard").is_err());
+        assert!(disk_option_cmd(Kind::Qemu, 100, "scsi0", "a:b", "iothread").is_err());
     }
 
     #[test]

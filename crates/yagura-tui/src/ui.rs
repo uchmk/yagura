@@ -419,7 +419,7 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::raw(""));
             l.push(Line::raw(format!("  grow by (GiB): {gib}_")));
             l.push(Line::styled(
-                "j/k disk  digits GiB  Enter grow  F2 add a disk of that size (on the storage of the selected one)  Esc cancel",
+                "j/k disk  digits GiB  Enter grow  F2 add a disk of that size  d discard  s ssd  c cache (VM)  Esc cancel",
                 DIM,
             ));
             (format!(" grow a disk of {} {} ", t.id, t.name), l)

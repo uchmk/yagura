@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-328 rows to press (328 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+329 rows to press (329 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -344,6 +344,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.94** `X` in Guests opens `backup coverage`: a first line counting the guests without a backup newer than 7 days, then every guest with `never`, `N days ago` or `today`, the never and stale ones first and marked `!`; a guest you know has a recent backup shows the right age; nothing is changed.
 - [ ] **3p.95** `B` on the Host screen opens `SDN`: a line counting zones and VNets, each zone with its type and nodes, under it the VNets (vlan tag, alias) and their subnets (CIDR, gateway, snat); on a cluster without SDN it says it is not set up; nothing is changed.
 - [ ] **3p.96** With `webhook` pointing at a dead address in `tui.toml`, a new alert is tried again after about 5 s and 30 s, and after the third failure the status line says `webhook failed after 3 tries: ` with curl's reason (for example `(6) Could not resolve host`); a working address still gets the alert once, and the screen never stops meanwhile.
+- [ ] **3p.97** In `z` on a VM disk, `d` asks to turn `discard=on` on or off, `s` does the same for `ssd=1` (not on a virtio disk), `c` steps `cache` through none, writeback, writethrough, directsync, unsafe and back to the default; the question shows the disk's value now and after, y runs `qm set <id> --<disk> …` on the guest's node and `qm config` shows the option (a running VM keeps it pending until its next stop and start); on a container nothing happens.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns
