@@ -1516,6 +1516,71 @@ pub fn net_del_cmd(kind: Kind, id: u32, dev: &str) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), "--delete", dev])
 }
 
+/// The hardware a VM can be given from the hardware dialog.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hw {
+    Usb,
+    Pci,
+    Serial,
+    Tpm,
+    Efi,
+}
+
+impl Hw {
+    pub const ALL: [Hw; 5] = [Hw::Usb, Hw::Pci, Hw::Serial, Hw::Tpm, Hw::Efi];
+
+    /// What the row says, with the kind of value it wants.
+    pub fn label(self) -> &'static str {
+        match self {
+            Hw::Usb => "USB device (vendor:product, e.g. 046d:c52b)",
+            Hw::Pci => "PCI passthrough (address, e.g. 0000:01:00.0)",
+            Hw::Serial => "serial port (a socket)",
+            Hw::Tpm => "TPM 2.0 state (storage)",
+            Hw::Efi => "EFI disk (storage; the BIOS must be OVMF)",
+        }
+    }
+
+    /// What the value starts as when the row is picked.
+    pub fn default_arg(self) -> &'static str {
+        match self {
+            Hw::Tpm | Hw::Efi => "local-lvm",
+            _ => "",
+        }
+    }
+
+    pub fn wants_value(self) -> bool {
+        self != Hw::Serial
+    }
+}
+
+/// Add hardware to a VM: the key it takes (the first free one), its value and the `qm set` command. `keys` are all keys of the
+/// configuration; `None` when the value is wrong or there is no free slot (the TPM state and the EFI disk exist once).
+pub fn hardware_add_cmd(id: u32, keys: &[String], hw: Hw, arg: &str) -> Option<(String, String, Cmd)> {
+    let hex = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let storage = !arg.is_empty() && !arg.contains([',', ':', ' ', '/']);
+    let (key, value) = match hw {
+        Hw::Usb => {
+            let (v, p) = arg.split_once(':')?;
+            (
+                free_key(keys, "usb", 4)?,
+                format!("host={}", if v.len() == 4 && p.len() == 4 && hex(v) && hex(p) { arg } else { return None }),
+            )
+        }
+        Hw::Pci => {
+            let ok = arg.contains('.') && arg.contains(':') && arg.split([':', '.']).all(hex) && arg.len() <= 12;
+            (free_key(keys, "hostpci", 15)?, if ok { arg.to_string() } else { return None })
+        }
+        Hw::Serial => (free_key(keys, "serial", 3)?, "socket".to_string()),
+        Hw::Tpm if storage && !keys.iter().any(|k| k == "tpmstate0") => ("tpmstate0".to_string(), format!("{arg}:1,version=v2.0")),
+        Hw::Efi if storage && !keys.iter().any(|k| k == "efidisk0") => {
+            ("efidisk0".to_string(), format!("{arg}:1,efitype=4m,pre-enrolled-keys=1"))
+        }
+        _ => return None,
+    };
+    let cmd = Cmd::new("qm", &["set", &id.to_string(), &format!("--{key}"), &value]);
+    Some((key, value, cmd))
+}
+
 /// The container templates `pveam` offers, from `pvesh get /nodes/<n>/aplinfo`: the template names, sorted.
 pub fn parse_aplinfo(json: &str) -> Vec<String> {
     let v: Value = serde_json::from_str(json).unwrap_or(Value::Null);
@@ -2023,6 +2088,26 @@ mod tests {
         let m = disk_move_cmd("pve", Kind::Lxc, 200, "mp0", "tank");
         assert_eq!(m.args[1], "/nodes/pve/lxc/200/move_volume");
         assert_eq!(disk_detach_cmd(Kind::Qemu, 100, "scsi1").args, ["set", "100", "--delete", "scsi1"]);
+    }
+
+    #[test]
+    fn hardware_is_added_to_a_vm() {
+        let keys: Vec<String> = ["scsi0", "usb0", "serial0"].iter().map(|s| s.to_string()).collect();
+        let (k, v, c) = hardware_add_cmd(101, &keys, Hw::Usb, "046d:c52b").unwrap();
+        assert_eq!((k.as_str(), v.as_str()), ("usb1", "host=046d:c52b"));
+        assert_eq!(c.args, ["set", "101", "--usb1", "host=046d:c52b"]);
+        assert!(hardware_add_cmd(101, &keys, Hw::Usb, "046d").is_none() && hardware_add_cmd(101, &keys, Hw::Usb, "046d:zzzz").is_none());
+        let (k, v, _) = hardware_add_cmd(101, &keys, Hw::Pci, "0000:01:00.0").unwrap();
+        assert_eq!((k.as_str(), v.as_str()), ("hostpci0", "0000:01:00.0"));
+        assert!(hardware_add_cmd(101, &keys, Hw::Pci, "01").is_none() && hardware_add_cmd(101, &keys, Hw::Pci, "0000:01:00.0,x").is_none());
+        assert_eq!(hardware_add_cmd(101, &keys, Hw::Serial, "").unwrap().0, "serial1");
+        let (k, v, _) = hardware_add_cmd(101, &keys, Hw::Tpm, "local-lvm").unwrap();
+        assert_eq!((k.as_str(), v.as_str()), ("tpmstate0", "local-lvm:1,version=v2.0"));
+        assert_eq!(hardware_add_cmd(101, &keys, Hw::Efi, "local-lvm").unwrap().1, "local-lvm:1,efitype=4m,pre-enrolled-keys=1");
+        // Those two exist once; a storage never holds a comma or a colon.
+        let has: Vec<String> = ["tpmstate0".to_string(), "efidisk0".to_string()].to_vec();
+        assert!(hardware_add_cmd(101, &has, Hw::Tpm, "x").is_none() && hardware_add_cmd(101, &has, Hw::Efi, "x").is_none());
+        assert!(hardware_add_cmd(101, &keys, Hw::Efi, "a,b").is_none() && hardware_add_cmd(101, &keys, Hw::Tpm, "").is_none());
     }
 
     #[test]

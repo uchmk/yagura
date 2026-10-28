@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-317 rows to press (317 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+318 rows to press (318 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -333,6 +333,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.83** In the `v` drives screen of a VM, `i` on a CD-ROM row asks for an ISO volume id then y/n and inserts it, `e` ejects it, `a` adds an empty CD-ROM on the first free ide0-3; a container refuses all three.
 - [ ] **3p.84** `a` in the Guests screen opens a form (name, cores, memory, disk, storage, bridge, ISO or template); F2 switches VM / container, a wrong value shows in red and blocks Enter, Enter finds a free id and asks y/n, then the guest appears; a container without a template is refused.
 - [ ] **3p.85** `P` in the Guests screen lists the downloadable container templates (read in the background); typing filters, Tab edits the storage, Enter asks y/n and runs `pveam download`; the finished template works in the `a` form.
+- [ ] **3p.86** `W` on a VM lists USB / PCI / serial / TPM / EFI disk; Up/Down picks, typing sets the value (storage for TPM and EFI starts as local-lvm), Enter asks y/n and runs `qm set` on the first free key; a wrong value or an existing tpmstate0/efidisk0 refuses; a container refuses `W`.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

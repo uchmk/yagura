@@ -424,6 +424,22 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ));
             (format!(" grow a disk of {} {} ", t.id, t.name), l)
         }
+        Dialog::Hardware { t, keys, sel, text } => {
+            let mut l =
+                vec![Line::styled(format!("{} {}: add hardware", t.id, t.name), Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
+            for (i, hw) in yagura_core::proxmox::ops::Hw::ALL.iter().enumerate() {
+                let st = if i == *sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+                l.push(Line::styled(format!(" {}", hw.label()), st));
+            }
+            l.push(Line::raw(""));
+            if keys.is_none() {
+                l.push(Line::styled("reading the configuration...", DIM));
+            } else if yagura_core::proxmox::ops::Hw::ALL[(*sel).min(yagura_core::proxmox::ops::Hw::ALL.len() - 1)].wants_value() {
+                l.push(Line::styled(format!("  value: {text}_"), Style::new().add_modifier(Modifier::BOLD)));
+            }
+            l.push(Line::styled("Up/Down kind  type the value  Enter ask  Esc close", DIM));
+            (" hardware ".to_string(), l)
+        }
         Dialog::Templates { list, sel, filter, storage, on_storage } => {
             let shown = crate::dialog::templates_shown(list.as_deref(), filter);
             let mark = |on: bool| if on { "_" } else { "" };
@@ -2371,6 +2387,16 @@ mod tests {
             Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), keys: vec![], sel: 0, gib: "10".into() });
         let s = text(&render(&a));
         assert!(s.contains("scsi0") && s.contains("size=32G") && s.contains("10_"), "{s}");
+    }
+
+    #[test]
+    fn the_hardware_dialog_draws() {
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Hardware { t: crate::dialog::Target::none(), keys: None, sel: 0, text: String::new() });
+        assert!(text(&render(&a)).contains("reading the configuration"));
+        a.dialog = Some(Dialog::Hardware { t: crate::dialog::Target::none(), keys: Some(vec![]), sel: 4, text: "local-lvm".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("USB device") && s.contains("EFI disk") && s.contains("value: local-lvm_"), "{s}");
     }
 
     #[test]

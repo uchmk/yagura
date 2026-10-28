@@ -231,6 +231,13 @@ pub enum Dialog {
         vals: [String; 2],
         err: String,
     },
+    /// Hardware to add to a VM (`W`): USB, PCI passthrough, a serial port, the TPM state, an EFI disk. `keys` are the config's keys.
+    Hardware {
+        t: Target,
+        keys: Option<Vec<String>>,
+        sel: usize,
+        text: String,
+    },
     /// The container templates to download (`P`): the list is read in the background, typing filters it, Tab switches to the storage.
     Templates {
         list: Option<Vec<String>>,
@@ -612,6 +619,18 @@ pub fn sure_disk_move(t: &Target, key: &str, value: &str, to: &str) -> Option<Su
         op: Op::Cmds { label: format!("move {key} to {to}"), cmds: vec![ops::disk_move_cmd(&t.node, t.kind, t.id, key, to)] },
         lines,
     })
+}
+
+/// The last question for adding the hardware `hw` (with the value `arg`) to a VM.
+pub fn sure_hardware(t: &Target, keys: &[String], hw: ops::Hw, arg: &str) -> Option<Sure> {
+    let (key, value, cmd) = ops::hardware_add_cmd(t.id, keys, hw, arg)?;
+    let mut lines = vec![(format!("add {key} = {value} to {} {}", t.id, t.name), false)];
+    match hw {
+        ops::Hw::Pci => lines.push(("the host needs IOMMU on; the VM must be stopped for the change to apply".to_string(), false)),
+        ops::Hw::Usb | ops::Hw::Serial => lines.push(("it applies when the VM is next started".to_string(), false)),
+        ops::Hw::Tpm | ops::Hw::Efi => lines.push(("it allocates a small volume on the storage".to_string(), false)),
+    }
+    Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("add {key} to {}", t.id), cmds: vec![cmd] }, lines })
 }
 
 /// The templates of `list` that contain `filter` (case does not matter).
@@ -1539,6 +1558,31 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => stay(t, disks, keys, sel, gib),
             }
         }
+        Dialog::Hardware { t, keys, mut sel, mut text } => {
+            let n = ops::Hw::ALL.len();
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Down | KeyCode::Tab => {
+                    sel = (sel + 1) % n;
+                    text = ops::Hw::ALL[sel].default_arg().to_string();
+                }
+                KeyCode::Up | KeyCode::BackTab => {
+                    sel = (sel + n - 1) % n;
+                    text = ops::Hw::ALL[sel].default_arg().to_string();
+                }
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::Char(c) if (c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '-' | '_')) && text.len() < 40 => text.push(c),
+                KeyCode::Enter => {
+                    if let Some(s) = keys.as_deref().and_then(|k| sure_hardware(&t, k, ops::Hw::ALL[sel], &text)) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Hardware { t, keys, sel, text }), Next::Nothing)
+        }
         Dialog::Templates { list, mut sel, mut filter, mut storage, mut on_storage } => {
             let shown = templates_shown(list.as_deref(), &filter);
             sel = sel.min(shown.len().saturating_sub(1));
@@ -2336,6 +2380,36 @@ mod tests {
         let Some(Dialog::Sure(s)) = key(open(2), KeyCode::Char('d'), none).0 else { panic!("no destroy question") };
         assert!(s.lines[0].1 && s.lines[0].0.starts_with("destroy unused0"));
         assert!(sure_disk_detach(&target(Kind::Lxc), "rootfs", "a:r").is_none());
+    }
+
+    #[test]
+    fn hardware_is_picked_typed_and_added() {
+        let none = |_: &Target| None;
+        let keys: Vec<String> = vec!["scsi0".into()];
+        let d = Dialog::Hardware { t: target(Kind::Qemu), keys: Some(keys.clone()), sel: 0, text: String::new() };
+        let mut d = Some(d);
+        for c in "046d:c52b".chars() {
+            d = key(d.unwrap(), KeyCode::Char(c), none).0;
+        }
+        let Some(Dialog::Sure(s)) = key(d.clone().unwrap(), KeyCode::Enter, none).0 else { panic!("no question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds {
+                label: "add usb0 to 101".into(),
+                cmds: vec![ops::hardware_add_cmd(101, &keys, ops::Hw::Usb, "046d:c52b").unwrap().2]
+            }
+        );
+        // Down moves to PCI with an empty value; Enter with a wrong value stays; TPM starts with the default storage.
+        let (d, _) = key(d.unwrap(), KeyCode::Down, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        assert!(matches!(d, Some(Dialog::Hardware { sel: 1, .. })));
+        let (d, _) = key(d.unwrap(), KeyCode::Down, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Down, none);
+        let Some(Dialog::Hardware { sel: 3, ref text, .. }) = d else { panic!("not on the TPM") };
+        assert_eq!(text, "local-lvm");
+        // Before the config arrives Enter does nothing.
+        let (d, _) = key(Dialog::Hardware { t: target(Kind::Qemu), keys: None, sel: 2, text: String::new() }, KeyCode::Enter, none);
+        assert!(matches!(d, Some(Dialog::Hardware { .. })));
     }
 
     #[test]
