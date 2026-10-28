@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table, T
 use yagura_core::proxmox::{Guest, Kind, Note, Status, apps};
 
 use crate::App;
-use crate::model::{DISK_FULL, Model, View, age, bytes, disk_pct, stale_limit, unix_now};
+use crate::model::{Model, View, age, bytes, disk_full, disk_pct, stale_limit, unix_now};
 use yagura_core::proxmox::rrd::Point;
 
 const RED: Style = Style::new().fg(Color::Red);
@@ -26,7 +26,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // About a fifth of the height for graphs above the guests (the host's, or the entered guest's), when the screen is tall enough to spare it.
     let tall = f.area().height >= 30;
     let table = app.view == View::Guests;
-    let inside_h = if table { 8 } else { 0 };
+    let inside_h = if table { 10 } else { 0 };
     let strip_h = if tall && (table || matches!(app.view, View::Graph(_))) { (f.area().height / 5).clamp(6, 12) } else { 0 };
     let [head, strip_area, body, detail, foot] = Layout::vertical([
         Constraint::Length(3),
@@ -53,11 +53,34 @@ pub fn draw(f: &mut Frame, app: &App) {
     if app.help {
         help(f);
     }
+    if let Some(r) = &app.results {
+        results(f, r);
+    }
+}
+
+/// What a power change of several guests did, one line each, over everything else.
+fn results(f: &mut Frame, r: &[crate::Answer]) {
+    let mut lines: Vec<Line> = r
+        .iter()
+        .map(|(id, name, res)| match res {
+            Ok(()) => Line::raw(format!("  {id:>5} {name:<20} done")),
+            Err(e) => Line::styled(format!("  {id:>5} {name:<20} failed: {e}"), RED),
+        })
+        .collect();
+    let bad = r.iter().filter(|x| x.2.is_err()).count();
+    lines.push(Line::raw(""));
+    lines.push(Line::raw(format!("{} done, {bad} failed. Press any key to close.", r.len() - bad)));
+    let area = f.area();
+    let w = 80.min(area.width);
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    f.render_widget(ratatui::widgets::Clear, rect);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(" results ")), rect);
 }
 
 /// The key list and what the marks mean, over everything else.
 fn help(f: &mut Frame) {
-    const LINES: [&str; 26] = [
+    const LINES: [&str; 27] = [
         "KEYS",
         "  Tab        switch view: host / guests / this machine's processes",
         "  j k        move down / up      g G  top / bottom",
@@ -78,6 +101,7 @@ fn help(f: &mut Frame) {
         "  red NEW    a newer version of the app exists (NEW column)",
         "  gray row   the guest is stopped;  + before ID  it is marked",
         "  STATE !    a task failed in the last 24 h;  stale  not started for 7d",
+        "  alerts N   header: new storage / pool / temperature / failed / stale (bell)",
         "",
         "The screen only reads. Nothing changes until you press y.",
         "PROBLEMS sort puts first: swap full, disk full, failed task (2 each),",
@@ -133,6 +157,9 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
     let nodes = m.cluster.nodes.iter().map(|n| format!("{} {}", n.name, if n.online { "online" } else { "offline" })).collect::<Vec<_>>();
     let mut l3 = vec![Span::styled(format!(" pve: {}", if nodes.is_empty() { note(m.cluster.note) } else { nodes.join(", ") }), DIM)];
     l3.extend(host_state(&m.cluster));
+    if !app.alerts.is_empty() {
+        l3.push(Span::styled(format!("  alerts {}", app.alerts.len()), RED.add_modifier(Modifier::BOLD)));
+    }
     f.render_widget(Paragraph::new(vec![l1, l2, Line::from(l3)]), area);
 }
 
@@ -143,8 +170,20 @@ fn host_state(c: &yagura_core::proxmox::Cluster) -> Vec<Span<'static>> {
     if !used.is_empty() {
         out.push(Span::styled("  storage", DIM));
         for (name, p) in used {
-            out.push(Span::styled(format!(" {name} {p:.0}%"), if p >= DISK_FULL { RED.add_modifier(Modifier::BOLD) } else { DIM }));
+            out.push(Span::styled(format!(" {name} {p:.0}%"), if p >= disk_full() { RED.add_modifier(Modifier::BOLD) } else { DIM }));
         }
+    }
+    if !c.pools.is_empty() {
+        out.push(Span::styled("  zfs", DIM));
+        for (name, health) in &c.pools {
+            out.push(Span::styled(format!(" {name} {health}"), if health == "ONLINE" { DIM } else { RED.add_modifier(Modifier::BOLD) }));
+        }
+    }
+    if let Some(t) = c.temp_c {
+        out.push(Span::styled(
+            format!("  {t:.0}C"),
+            if t >= crate::config::get().temp_hot { RED.add_modifier(Modifier::BOLD) } else { DIM },
+        ));
     }
     if c.reboot_required {
         out.push(Span::styled("  reboot needed", RED.add_modifier(Modifier::BOLD)));
@@ -229,7 +268,7 @@ fn guests(f: &mut Frame, app: &App, area: Rect) {
             state.push(Span::styled("!", RED.add_modifier(Modifier::BOLD)));
         }
         let (disk, disk_style) = match disk_pct(g) {
-            Some(p) => (format!("{p:3.0}%"), if p >= DISK_FULL { RED.add_modifier(Modifier::BOLD) } else { Style::new() }),
+            Some(p) => (format!("{p:3.0}%"), if p >= disk_full() { RED.add_modifier(Modifier::BOLD) } else { Style::new() }),
             None => (String::new(), DIM),
         };
         let base = if run { Style::new() } else { DIM };
@@ -419,7 +458,29 @@ pub fn hist_lines(m: &Model, g: &Guest, now: u64) -> Vec<Line<'static>> {
     if let Some(oldest) = h.oldest_snapshot() {
         out.push(Line::raw(format!("snapshots: {}, oldest {} ago", h.snapshots.len(), age(now.saturating_sub(oldest)))));
     }
+    match h.last_backup() {
+        Some(t) => out.push(Line::raw(format!("backup: last {} ago", age(now.saturating_sub(t))))),
+        None => out.push(Line::styled("backup: none found (a backup made outside Proxmox does not show)", DIM)),
+    }
     out
+}
+
+/// The packages an upgrade would install; the ones that need care (a kernel, Proxmox, libc…) come first, in yellow.
+fn upgrade_preview(names: &[String]) -> Line<'static> {
+    const SHOWN: usize = 8;
+    let (care, rest): (Vec<&String>, Vec<&String>) = names.iter().partition(|n| yagura_core::proxmox::high_impact(n));
+    let mut spans = vec![Span::raw("will upgrade:")];
+    for n in care.iter().chain(rest.iter()).take(SHOWN) {
+        let hot = yagura_core::proxmox::high_impact(n);
+        spans.push(Span::styled(format!(" {n}"), if hot { YELLOW.add_modifier(Modifier::BOLD) } else { Style::new() }));
+    }
+    if names.len() > SHOWN {
+        spans.push(Span::raw(format!(" +{}", names.len() - SHOWN)));
+    }
+    if !care.is_empty() {
+        spans.push(Span::styled("  (high impact: a reboot is likely)", YELLOW));
+    }
+    Line::from(spans)
 }
 
 /// The container under the cursor, as `pct exec` found it.
@@ -440,6 +501,9 @@ fn inside(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::raw(format!("packages: {}   upgradable: {}{held}{stale}", n(i.packages), n(i.upgradable))));
         if i.reboot_required {
             lines.push(Line::styled("reboot required", RED));
+        }
+        if !i.upgrades.is_empty() {
+            lines.push(upgrade_preview(&i.upgrades));
         }
     } else if g.status == Status::Stopped {
         lines.push(Line::styled("stopped", DIM));
@@ -710,6 +774,10 @@ mod tests {
             marks: Default::default(),
             log: false,
             log_back: 0,
+            alerts: vec![],
+            alerts_seen: Default::default(),
+            batch: None,
+            results: None,
         }
     }
 
@@ -721,6 +789,17 @@ mod tests {
 
     fn text(b: &Buffer) -> String {
         b.content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn upgrade_preview_puts_care_first_and_results_list_failures() {
+        let names: Vec<String> = ["vim", "libc6", "curl"].iter().map(|s| s.to_string()).collect();
+        let l: String = upgrade_preview(&names).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(l.find("libc6").unwrap() < l.find("vim").unwrap() && l.contains("high impact"));
+        let mut a = app(View::Guests);
+        a.results = Some(vec![(100, "web".into(), Ok(())), (101, "db".into(), Err("locked".into()))]);
+        let t = text(&render(&a));
+        assert!(t.contains("done") && t.contains("failed: locked") && t.contains("1 done, 1 failed"));
     }
 
     #[test]
@@ -936,6 +1015,7 @@ mod tests {
                 t("vzsnapshot", now - 3600, Some(now - 3500), "snapshot failed"),
             ],
             snapshots: vec![now - 5 * 86400, now - 86400],
+            backups: vec![],
         };
         let mut a = app(View::Guests);
         a.model.cluster.guests[0].status = Status::Stopped;

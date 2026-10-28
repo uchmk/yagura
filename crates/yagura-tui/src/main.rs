@@ -3,6 +3,7 @@
 //! slow (`pvesh`, `pct exec`) runs on threads of its own and reports over a
 //! channel, so the keys never wait.
 
+mod config;
 mod model;
 mod ui;
 
@@ -24,6 +25,9 @@ const RRD_EVERY: Duration = Duration::from_secs(20);
 /// background.
 const PARALLEL: usize = 4;
 const SAMPLE: Duration = Duration::from_secs(1);
+
+/// One guest's answer to a power change: its ID, name and result.
+pub type Answer = (u32, String, Result<(), String>);
 
 pub struct App {
     pub model: Model,
@@ -53,6 +57,13 @@ pub struct App {
     /// The entered guest shows its log instead of its processes, and how many lines back from the newest it is scrolled.
     pub log: bool,
     pub log_back: usize,
+    /// What needs a look now, and the keys already announced (a new key rings the bell once).
+    pub alerts: Vec<(String, String)>,
+    pub alerts_seen: HashSet<String>,
+    /// A power change of several guests in flight: how many, and the answers so far.
+    pub batch: Option<(usize, Vec<Answer>)>,
+    /// The answers of the last finished batch, shown until a key is pressed.
+    pub results: Option<Vec<Answer>>,
 }
 
 /// What the user asked of a guest, shown until they answer.
@@ -115,6 +126,10 @@ fn main() -> std::io::Result<()> {
         marks: HashSet::new(),
         log: false,
         log_back: 0,
+        alerts: vec![],
+        alerts_seen: HashSet::new(),
+        batch: None,
+        results: None,
     };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
@@ -198,13 +213,21 @@ fn run(
                         let kind = g.kind;
                         start_inspect(&mut app.model, id, kind, jobs_tx);
                     }
-                    app.status = match r {
+                    app.status = match &r {
                         Ok(()) => format!("{id}: {} done", p.verb()),
                         Err(e) => format!("{id}: {} failed: {e}", p.verb()),
+                    };
+                    if let Some((total, done)) = &mut app.batch {
+                        let name = app.model.cluster.guests.iter().find(|g| g.id == id).map_or(String::new(), |g| g.name.clone());
+                        done.push((id, name, r));
+                        if done.len() >= *total {
+                            app.results = app.batch.take().map(|b| b.1);
+                        }
                     }
                 }
             }
         }
+        watch_alerts(app);
         prefetch(app, jobs_tx);
         prefetch_hist(app, jobs_tx);
         refresh_rrd(app, jobs_tx);
@@ -228,6 +251,7 @@ fn run(
             continue;
         }
         match k.code {
+            _ if app.results.is_some() => app.results = None,
             _ if app.help => app.help = false,
             _ if app.filtering => {
                 match k.code {
@@ -367,7 +391,7 @@ fn impact(m: &Model, id: u32, power: Power) -> String {
             let n =
                 m.inside.get(&id).and_then(|i| i.upgradable).map_or("updates of unknown number".to_string(), |n| format!("{n} updates"));
             let free = m.cluster.guests.iter().find(|g| g.id == id).filter(|g| g.maxdisk > 0).map(|g| {
-                let low = g.maxdisk.saturating_sub(g.disk) < LOW_FREE || model::disk_pct(g).is_some_and(|p| p >= model::DISK_FULL);
+                let low = g.maxdisk.saturating_sub(g.disk) < LOW_FREE || model::disk_pct(g).is_some_and(|p| p >= model::disk_full());
                 format!(", {} free{}", bytes(g.maxdisk.saturating_sub(g.disk)), if low { " - LOW, may fail" } else { "" })
             });
             format!("installs {n}{}", free.unwrap_or_default())
@@ -394,6 +418,7 @@ fn answer(app: &mut App, key: KeyCode, tx: &Sender<Job>) {
         app.busy.push((*id, power, Instant::now()));
     }
     app.marks.clear();
+    app.batch = (targets.len() > 1).then(|| (targets.len(), vec![]));
     let tx = tx.clone();
     // One thread goes through them one after another: an upgrade of ten containers at once would hammer the disks.
     std::thread::Builder::new()
@@ -475,26 +500,46 @@ fn prefetch(app: &mut App, tx: &Sender<Job>) {
     }
 }
 
+/// Announce alerts that were not there a moment ago: a status line and, unless switched off, the terminal bell.
+fn watch_alerts(app: &mut App) {
+    use std::io::Write;
+    let now = model::unix_now();
+    let cur = app.model.alerts(now);
+    let new: Vec<&str> = cur.iter().filter(|(k, _)| !app.alerts_seen.contains(k)).map(|(_, t)| t.as_str()).collect();
+    if !new.is_empty() {
+        app.status = format!("ALERT: {}", new.join("; "));
+        if config::get().bell {
+            let mut out = std::io::stdout();
+            let _ = out.write_all(b"\x07");
+            let _ = out.flush();
+        }
+    }
+    app.alerts_seen = cur.iter().map(|(k, _)| k.clone()).collect();
+    app.alerts = cur;
+}
+
 /// Read every guest's task log and snapshots, a few at a time, and again every few minutes (so a job that wakes a
 /// guest weekly and stops it shows its last run, and a failed task shows soon).
 fn prefetch_hist(app: &mut App, tx: &Sender<Job>) {
     let m = &mut app.model;
-    let todo: Vec<(u32, String, proxmox::Kind)> = m
+    let storages =
+        |node: &str| -> Vec<String> { m.cluster.storage.iter().filter(|s| s.active && s.node == node).map(|s| s.name.clone()).collect() };
+    let todo: Vec<(u32, String, proxmox::Kind, Vec<String>)> = m
         .cluster
         .guests
         .iter()
         .filter(|g| !g.template && !m.hist_looking.contains(&g.id))
         .filter(|g| m.hist.get(&g.id).is_none_or(|(_, at)| at.elapsed() >= HIST_EVERY))
-        .map(|g| (g.id, g.node.clone(), g.kind))
+        .map(|g| (g.id, g.node.clone(), g.kind, storages(&g.node)))
         .take(PARALLEL.saturating_sub(m.hist_looking.len()))
         .collect();
-    for (id, node, kind) in todo {
+    for (id, node, kind, stores) in todo {
         m.hist_looking.push(id);
         let tx = tx.clone();
         std::thread::Builder::new()
             .name("yagura-hist".into())
             .spawn(move || {
-                let _ = tx.send(Job::History(id, proxmox::history(&node, kind, id)));
+                let _ = tx.send(Job::History(id, proxmox::history(&node, kind, id, &stores)));
             })
             .expect("spawn the history thread");
     }

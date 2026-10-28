@@ -95,6 +95,50 @@ pub struct Cluster {
     pub storage: Vec<Storage>,
     /// This host runs an older kernel than the newest one installed, or says it wants a reboot.
     pub reboot_required: bool,
+    /// ZFS pools of this host as `(name, health)`; empty when there is no `zpool`.
+    #[serde(default)]
+    pub pools: Vec<(String, String)>,
+    /// The hottest thermal zone of this host, in degrees Celsius.
+    #[serde(default)]
+    pub temp_c: Option<f32>,
+}
+
+impl Cluster {
+    /// Pools whose health is not `ONLINE`.
+    pub fn bad_pools(&self) -> Vec<&(String, String)> {
+        self.pools.iter().filter(|p| p.1 != "ONLINE").collect()
+    }
+}
+
+/// `zpool list -H -o name,health` into `(name, health)`.
+pub fn parse_zpool(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            Some((f.next()?.to_string(), f.next()?.to_string()))
+        })
+        .collect()
+}
+
+/// The hottest of the thermal zones' millidegree readings, in degrees; implausible values are dropped.
+pub fn max_temp(milli: &[i64]) -> Option<f32> {
+    milli.iter().copied().filter(|m| (1..150_000).contains(m)).max().map(|m| m as f32 / 1000.0)
+}
+
+fn host_pools() -> Vec<(String, String)> {
+    Command::new("zpool")
+        .args(["list", "-H", "-o", "name,health"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| parse_zpool(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or_default()
+}
+
+fn host_temp() -> Option<f32> {
+    let zones = std::fs::read_dir("/sys/class/thermal").ok()?;
+    let v: Vec<i64> = zones.filter_map(|e| std::fs::read_to_string(e.ok()?.path().join("temp")).ok()?.trim().parse().ok()).collect();
+    max_temp(&v)
 }
 
 /// One storage of a node, from the same listing as the guests.
@@ -283,7 +327,7 @@ pub fn read() -> Cluster {
         };
     }
     let storage = parse_storage(&String::from_utf8_lossy(&out.stdout));
-    Cluster { nodes, guests, note: None, storage, reboot_required: host_reboot_required() }
+    Cluster { nodes, guests, note: None, storage, reboot_required: host_reboot_required(), pools: host_pools(), temp_c: host_temp() }
 }
 
 /// What is inside a guest: a container read with `pct exec`, a VM through its
@@ -303,6 +347,9 @@ pub struct Inside {
     pub reboot_required: bool,
     /// Apps an installer left a version for: `(name, version)`.
     pub apps: Vec<(String, String)>,
+    /// Names of the packages an upgrade would install (held ones left out).
+    #[serde(default)]
+    pub upgrades: Vec<String>,
     /// A VM whose guest agent does not answer: nothing could be read.
     pub no_agent: bool,
 }
@@ -339,6 +386,24 @@ pub fn parse_upgradable(text: &str) -> (u32, u32) {
         }
     }
     (up, held)
+}
+
+/// Names of the packages `apt list --upgradable` lists, held ones left out.
+pub fn parse_upgrade_names(text: &str) -> Vec<String> {
+    let (list, holds) = text.split_once(HOLD).unwrap_or((text, ""));
+    let holds: Vec<&str> = holds.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    list.lines()
+        .filter(|l| l.contains("[upgradable from:"))
+        .filter_map(|l| l.split('/').next())
+        .filter(|n| !holds.contains(n))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether upgrading this package needs care: a kernel, Proxmox itself, the init system, libc, a bootloader.
+pub fn high_impact(name: &str) -> bool {
+    const PREFIX: [&str; 8] = ["linux-image", "pve-", "proxmox-", "systemd", "libc6", "grub", "openssh-server", "zfs"];
+    name == "pve-manager" || PREFIX.iter().any(|p| name.starts_with(p))
 }
 
 /// The first `E:` line apt printed, else the last line said.
@@ -461,6 +526,8 @@ pub struct Run {
 pub struct History {
     pub tasks: Vec<Task>,
     pub snapshots: Vec<u64>,
+    /// Creation times of the guest's backups on the storages Proxmox lists.
+    pub backups: Vec<u64>,
 }
 
 impl History {
@@ -486,6 +553,17 @@ impl History {
     /// The newest task that failed at or after `since` (Unix seconds).
     pub fn failure_since(&self, since: u64) -> Option<&Task> {
         self.tasks.iter().rev().find(|t| t.failed() && t.end.unwrap_or(t.start) >= since)
+    }
+
+    /// When the newest backup was made: a backup file on a storage, or a vzdump task that finished well.
+    pub fn last_backup(&self) -> Option<u64> {
+        let task = self.tasks.iter().filter(|t| t.kind == "vzdump" && t.status == "OK").map(|t| t.end.unwrap_or(t.start)).max();
+        self.backups.iter().copied().chain(task).max()
+    }
+
+    /// The newest vzdump task that failed at or after `since`.
+    pub fn backup_failure_since(&self, since: u64) -> Option<&Task> {
+        self.tasks.iter().rev().find(|t| t.kind == "vzdump" && t.failed() && t.end.unwrap_or(t.start) >= since)
     }
 
     pub fn oldest_snapshot(&self) -> Option<u64> {
@@ -521,6 +599,12 @@ pub fn parse_snapshots(json: &str) -> Vec<u64> {
     v.as_array().map(|l| l.iter().filter_map(|s| s["snaptime"].as_u64()).collect()).unwrap_or_default()
 }
 
+/// The creation times of the backups in a storage content listing.
+pub fn parse_backups(json: &str) -> Vec<u64> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    v.as_array().map(|l| l.iter().filter_map(|b| b["ctime"].as_u64()).collect()).unwrap_or_default()
+}
+
 fn pvesh(path: &str, extra: &[&str]) -> Option<String> {
     let o = Command::new("pvesh").args(["get", path]).args(extra).args(["--output-format", "json"]).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
@@ -528,11 +612,16 @@ fn pvesh(path: &str, extra: &[&str]) -> Option<String> {
 
 /// The task log and snapshots of a guest (read-only `pvesh`). This is how a guest that is stopped after its weekly job
 /// (a backup container) shows when it last ran, though Proxmox lists no backup for it. Slow: call it from a thread of its own.
-pub fn history(node: &str, kind: Kind, id: u32) -> History {
+pub fn history(node: &str, kind: Kind, id: u32, storages: &[String]) -> History {
     let tasks = pvesh(&format!("/nodes/{node}/tasks"), &["--vmid", &id.to_string(), "--limit", "50"]).map(|j| parse_tasks(&j));
     let what = if kind == Kind::Lxc { "lxc" } else { "qemu" };
     let snapshots = pvesh(&format!("/nodes/{node}/{what}/{id}/snapshot"), &[]).map(|j| parse_snapshots(&j));
-    History { tasks: tasks.unwrap_or_default(), snapshots: snapshots.unwrap_or_default() }
+    let backups = storages
+        .iter()
+        .filter_map(|st| pvesh(&format!("/nodes/{node}/storage/{st}/content"), &["--content", "backup", "--vmid", &id.to_string()]))
+        .flat_map(|j| parse_backups(&j))
+        .collect();
+    History { tasks: tasks.unwrap_or_default(), snapshots: snapshots.unwrap_or_default(), backups }
 }
 
 /// The last lines of a running guest's journal (or syslog); `None` when it can not be asked. Slow: call it from a thread of its own.
@@ -589,8 +678,8 @@ pub fn inspect(kind: Kind, id: u32) -> Inside {
             name.or_else(|| exec(kind, id, &["cat", "/etc/os-release"]).and_then(|t| parse_os_release(&t)))
         }
     };
-    let up = exec(kind, id, &["sh", "-c", "apt list --upgradable 2>/dev/null; echo ---hold---; apt-mark showhold"])
-        .map(|t| parse_upgradable(&t));
+    let listing = exec(kind, id, &["sh", "-c", "apt list --upgradable 2>/dev/null; echo ---hold---; apt-mark showhold"]);
+    let up = listing.as_deref().map(parse_upgradable);
     Inside {
         os,
         packages: exec(kind, id, &["dpkg-query", "-W", "-f", "${Package}\n"]).map(|t| count_packages(&t)),
@@ -605,6 +694,7 @@ pub fn inspect(kind: Kind, id: u32) -> Inside {
         } else {
             vec![]
         },
+        upgrades: listing.as_deref().map(parse_upgrade_names).unwrap_or_default(),
         no_agent: false,
     }
 }
@@ -612,6 +702,35 @@ pub fn inspect(kind: Kind, id: u32) -> Inside {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zpool_health_and_temperature() {
+        let p = parse_zpool("rpool\tONLINE\ntank\tDEGRADED\n");
+        assert_eq!(p, vec![("rpool".into(), "ONLINE".into()), ("tank".into(), "DEGRADED".into())]);
+        let c = Cluster { pools: p, ..Cluster::default() };
+        assert_eq!(c.bad_pools().len(), 1);
+        assert_eq!(max_temp(&[45000, 71500, 0, -5]), Some(71.5));
+        assert_eq!(max_temp(&[]), None);
+    }
+
+    #[test]
+    fn upgrade_names_and_impact() {
+        let t = "Listing...\nlibc6/stable 2.36-9 amd64 [upgradable from: 2.36-8]\nvim/stable 9.0 amd64 [upgradable from: 8.9]\n---hold---\nvim\n";
+        assert_eq!(parse_upgrade_names(t), vec!["libc6".to_string()]);
+        assert!(high_impact("linux-image-6.8") && high_impact("pve-manager") && !high_impact("vim"));
+    }
+
+    #[test]
+    fn backups_from_content_and_tasks() {
+        assert_eq!(parse_backups(r#"[{"ctime":100},{"ctime":300},{"x":1}]"#), vec![100, 300]);
+        let ok = Task { kind: "vzdump".into(), start: 500, end: Some(520), status: "OK".into() };
+        let bad = Task { kind: "vzdump".into(), start: 900, end: Some(910), status: "job errors".into() };
+        let h = History { tasks: vec![ok, bad], snapshots: vec![], backups: vec![300] };
+        assert_eq!(h.last_backup(), Some(520));
+        assert_eq!(h.backup_failure_since(800).map(|t| t.start), Some(900));
+        assert!(h.backup_failure_since(1000).is_none());
+        assert_eq!(History::default().last_backup(), None);
+    }
 
     const LIST: &str = r#"[
       {"type":"node","node":"pve","status":"online","cpu":0.07,"maxcpu":16,"mem":8000000000,"maxmem":64000000000,"uptime":1000,"id":"node/pve"},
@@ -633,7 +752,7 @@ mod tests {
             {"type":"vzstart","starttime":9000}
         ]"#;
         let snaps = r#"[{"name":"a","snaptime":50},{"name":"current"},{"name":"b","snaptime":90}]"#;
-        let h = History { tasks: parse_tasks(json), snapshots: parse_snapshots(snaps) };
+        let h = History { tasks: parse_tasks(json), snapshots: parse_snapshots(snaps), backups: vec![] };
         assert_eq!(h.runs(5), [Run { start: 300, ran: Some(710) }, Run { start: 200, ran: Some(810) }]);
         assert_eq!(h.last_start(), Some(300));
         assert_eq!(h.failure_since(0).map(|t| t.start), Some(400));

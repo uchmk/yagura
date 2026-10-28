@@ -6,6 +6,17 @@
 
 ## [未リリース]
 
+## [0.73.54] - 2026-10-28
+
+### 追加
+
+- yagura-tui: 詳細ペインにバックアップの最終時刻（`backup: last Nd ago`）を出す。Proxmox のストレージの backup と vzdump のタスクから求め、Proxmox の外に取ったバックアップは薄い `none found` になる。
+- yagura-tui: 複数のゲストをまとめて起動・停止・再起動したあと、ゲストごとの `done` / `failed: …` の一覧を出す（何かキーで閉じる）。
+- yagura-tui: ゲストの中でアップグレードされるパッケージ名を出し、カーネル・`pve-`・systemd・libc6 などは黄色で先に並べる。
+- yagura-tui: ホストの行に ZFS プールの状態（ONLINE 以外は赤）と最も熱い熱ゾーンの温度を出す。
+- yagura-tui: ストレージの使用率・プールの異常・高温・失敗したタスク・長く止まったゲストが新しく出たとき、ベルを 1 回鳴らし `ALERT: …` と `alerts N` を出す（`YAGURA_BELL=0` で無音）。
+- yagura-tui: 設定ファイル `~/.config/yagura/tui.toml`（`stale_days`・`disk_full`・`storage_full`・`temp_hot`・`bell`）。環境変数が優先。
+
 ## [0.73.53] - 2026-10-28
 
 ### 追加

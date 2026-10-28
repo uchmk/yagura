@@ -1,6 +1,6 @@
 [package]
 name = "yagura-tui"
-version = "0.73.53"
+version = "0.73.54"
 edition = "2024"
 rust-version = "1.95"
 description = "yagura in the terminal: the host and its Proxmox VE guests on one screen"
@@ -11,3 +11,4 @@ repository = "https://github.com/uchmk/yagura"
 yagura-core = { path = "../yagura-core" }
 ratatui = "0.30"
 crossbeam-channel = "0.5"
+toml = "1.1"

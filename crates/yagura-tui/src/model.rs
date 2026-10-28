@@ -2,7 +2,6 @@
 //! the tests need none.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use yagura_core::proxmox::rrd::Point;
@@ -51,19 +50,17 @@ impl Sort {
     }
 }
 
-/// The root disk is called full from here (percent).
-pub const DISK_FULL: f64 = 90.0;
-
-/// A stopped guest that was not started for this many days is called stale (`YAGURA_STALE_DAYS` changes it).
-pub const STALE_DAYS: u64 = 7;
+/// The root disk is called full from here (percent; `disk_full` in the settings).
+pub fn disk_full() -> f64 {
+    crate::config::get().disk_full
+}
 
 /// A failed task counts as a problem for this long (seconds).
 pub const FAILED_WINDOW: u64 = 24 * 3600;
 
-/// The stale limit in seconds.
+/// A stopped guest that was not started for this long is called stale (`stale_days` in the settings), in seconds.
 pub fn stale_limit() -> u64 {
-    static LIMIT: OnceLock<u64> = OnceLock::new();
-    *LIMIT.get_or_init(|| std::env::var("YAGURA_STALE_DAYS").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(STALE_DAYS) * 86400)
+    crate::config::get().stale_days * 86400
 }
 
 /// Now, in Unix seconds.
@@ -175,7 +172,7 @@ impl Model {
             if g.swap.is_some_and(|s| s.near_limit()) {
                 n += 2;
             }
-            if disk_pct(g).is_some_and(|p| p >= DISK_FULL) {
+            if disk_pct(g).is_some_and(|p| p >= disk_full()) {
                 n += 2;
             }
             if let Some(i) = self.inside.get(&g.id) {
@@ -200,6 +197,32 @@ impl Model {
             return None;
         }
         self.hist.get(&g.id)?.0.failure_since(now.saturating_sub(FAILED_WINDOW))
+    }
+
+    /// What needs a look now, as `(key, text)`; a key stays the same while the cause does, so a new key is a new alert.
+    pub fn alerts(&self, now: u64) -> Vec<(String, String)> {
+        let cfg = crate::config::get();
+        let mut out = vec![];
+        for s in &self.cluster.storage {
+            if let Some(p) = s.pct().filter(|p| *p >= cfg.storage_full) {
+                out.push((format!("storage {}", s.name), format!("storage {} {p:.0}% full", s.name)));
+            }
+        }
+        for (name, health) in self.cluster.bad_pools() {
+            out.push((format!("pool {name}"), format!("pool {name} is {health}")));
+        }
+        if let Some(t) = self.cluster.temp_c.filter(|t| *t >= cfg.temp_hot) {
+            out.push(("temp".into(), format!("host at {t:.0}C")));
+        }
+        for g in self.cluster.guests.iter().filter(|g| !g.template) {
+            if let Some(t) = self.failed_at(g, now) {
+                out.push((format!("failed {} {}", g.id, t.start), format!("{} {}: {} failed", g.id, g.name, t.kind)));
+            }
+            if self.stale_at(g, now).is_some() {
+                out.push((format!("stale {}", g.id), format!("{} {} is stale", g.id, g.name)));
+            }
+        }
+        out
     }
 
     /// `(guests, running, with updates waiting, wanting a reboot)` over the guests on show, templates left out.
@@ -332,10 +355,11 @@ mod tests {
         let t = |kind: &str, start, status: &str| Task { kind: kind.into(), start, end: Some(start + 1), status: status.into() };
         let now = 100 * 86400;
         assert_eq!(m.problems_at(&g, now), 0);
-        let h = History { tasks: vec![t("vzstart", now - 30 * 86400, "OK")], snapshots: vec![] };
+        let h = History { tasks: vec![t("vzstart", now - 30 * 86400, "OK")], snapshots: vec![], backups: vec![] };
         m.hist.insert(5, (h, Instant::now()));
         assert_eq!((m.problems_at(&g, now), m.stale_at(&g, now)), (1, Some(30 * 86400)));
-        let h = History { tasks: vec![t("vzstart", now - 86400, "OK"), t("vzstart", now - 100, "boom")], snapshots: vec![] };
+        let h =
+            History { tasks: vec![t("vzstart", now - 86400, "OK"), t("vzstart", now - 100, "boom")], snapshots: vec![], backups: vec![] };
         m.hist.insert(5, (h, Instant::now()));
         assert_eq!((m.problems_at(&g, now), m.stale_at(&g, now).is_some()), (2, false));
         let tpl = Guest { template: true, ..g.clone() };

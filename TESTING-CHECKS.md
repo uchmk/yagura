@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-249 rows to press (249 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+255 rows to press (255 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -266,6 +266,12 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.15** `Space` marks guests (`+` before the ID, `N marked` in the title); `u` / `o` / `d` / `r` ask once for all of them, listing the targets, and run them one after another; `Esc` clears the marks.
 - [ ] **3p.16** `l` inside a guest switches to its journal (newest lines, `j`/`k` scroll back, `G` newest); a stopped guest says there is no log; `l` again returns to the processes.
 - [ ] **3p.17** in a terminal about 100 columns wide the table hides TAGS, OS, NEW, VER, APP, NET and UP in that order and keeps ID, NAME, STATE, CPU, MEM, DISK; Tera Term shows no garbled characters.
+- [ ] **3p.18** the detail pane shows `backup: last Nd ago` or a dim `backup: none found`; a guest backed up outside Proxmox shows the dim line.
+- [ ] **3p.19** after `u` / `o` / `d` / `r` on several marked guests a `results` box lists each guest as `done` or `failed: …`; any key closes it.
+- [ ] **3p.20** inside a guest with updates, `will upgrade:` lists package names; kernel / `pve-` / `systemd` / libc6 ones come first in yellow.
+- [ ] **3p.21** the host line shows `zfs <pool> <health>` (red unless ONLINE) and the hottest zone in degrees (red from `temp_hot`).
+- [ ] **3p.22** a new alert (storage, pool, temperature, failed task, stale) rings the bell once and shows `ALERT: …` and `alerts N` in the header; `YAGURA_BELL=0` keeps it silent.
+- [ ] **3p.23** `~/.config/yagura/tui.toml` (`stale_days`, `disk_full`, `storage_full`, `temp_hot`, `bell`) changes the limits; an environment variable wins over the file.
 
 ## 4. Resizing the columns
 
