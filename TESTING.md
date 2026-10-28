@@ -343,6 +343,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.47 | `D` on a running guest says to stop it first; on a stopped guest it asks y/n with a red warning and then `qm destroy` / `pct destroy --purge` removes it with its disks. |
 | 3p.48 | `T` on a stopped guest asks y/n with a red warning and then `qm template` / `pct template` turns it into a template; on a running guest or a template it says why not. |
 | 3p.49 | `N` lists the guest's network devices; Up/Down pick one, Tab moves between bridge, VLAN and MAC (a bad VLAN or MAC turns red and Enter does nothing), Enter shows the old and new value and asks y/n; then `qm set` / `pct set --netN` applies it and `c` shows it. |
+| 3p.50 | `F` shows whether the guest's firewall is on and its rules (disabled ones dimmed, j/k scroll); `f` or Enter asks y/n (turning it on carries a red warning) and then `pvesh set .../firewall/options --enable` switches it. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

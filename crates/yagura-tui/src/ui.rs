@@ -172,6 +172,29 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ];
             (" node ".to_string(), l)
         }
+        Dialog::Firewall { t, state, top } => {
+            let mut l = vec![];
+            match state {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some((on, rules)) => {
+                    l.push(Line::styled(
+                        format!("firewall {}", if *on { "ON" } else { "off" }),
+                        if *on { Style::new().add_modifier(Modifier::BOLD) } else { DIM },
+                    ));
+                    l.push(Line::raw(""));
+                    if rules.is_empty() {
+                        l.push(Line::styled("no rules", DIM));
+                    }
+                    for r in rules.iter().skip(*top).take(14) {
+                        let st = if r.enabled { Style::new() } else { DIM };
+                        l.push(Line::styled(format!(" {:>2} {}{}", r.pos, if r.enabled { "" } else { "# " }, r.line), st));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("f/Enter on/off  j/k scroll  Esc close", DIM));
+            (format!(" firewall of {} {} ", t.id, t.name), l)
+        }
         Dialog::Net { t, nets, sel, field, bridge, vlan, mac } => {
             let mut l = vec![];
             match nets {
@@ -473,7 +496,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N  clone / delete / template / network;  Storage: Enter backups",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  Storage: Enter backups",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1590,6 +1613,19 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_firewall_dialog_draws() {
+        use crate::dialog::Target;
+        let t = Target { id: 100, name: "vm".into(), kind: Kind::Qemu, node: "pve".into(), maxmem: 0, used: 0, template: false };
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Firewall { t: t.clone(), state: None, top: 0 });
+        assert!(text(&render(&a)).contains("reading..."));
+        let rules = vec![yagura_core::proxmox::ops::FwRule { pos: 0, enabled: true, line: "in ACCEPT SSH".into() }];
+        a.dialog = Some(Dialog::Firewall { t, state: Some((true, rules)), top: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("firewall ON") && s.contains("in ACCEPT SSH"), "{s}");
     }
 
     #[test]

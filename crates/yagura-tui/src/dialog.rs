@@ -124,6 +124,12 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// The firewall of a guest: whether it is on and its rules (`None` while they are read), scrolled to `top`.
+    Firewall {
+        t: Target,
+        state: Option<(bool, Vec<ops::FwRule>)>,
+        top: usize,
+    },
     /// The network devices of a guest (`None` while the config is read), the one under the cursor and its bridge, VLAN tag and MAC;
     /// `field` is the one being typed (0 bridge, 1 VLAN, 2 MAC).
     Net {
@@ -410,6 +416,19 @@ pub fn sure_maintenance(node: &str, on: bool) -> Sure {
     }
 }
 
+/// The last question for switching the firewall of `t` on or off.
+pub fn sure_firewall(t: &Target, on: bool) -> Sure {
+    let mut lines = vec![(format!("turn the firewall of {} {} {}", t.id, t.name, if on { "on" } else { "off" }), false)];
+    if on {
+        lines.push(("with no rule that lets traffic in, the default policy drops it and the guest can be cut off".into(), true));
+    }
+    Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("firewall {}", t.id), cmds: vec![ops::firewall_cmd(&t.node, t.kind, t.id, on)] },
+        lines,
+    }
+}
+
 /// The last question for the network device under the cursor with the bridge, VLAN tag and MAC typed; `None` for a bad value.
 pub fn sure_net(t: &Target, nets: &[(String, String)], sel: usize, bridge: &str, vlan: &str, mac: &str) -> Option<Sure> {
     let (dev, old) = nets.get(sel)?;
@@ -620,6 +639,21 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => top,
             };
             (Some(Dialog::Config { t, list, top }), Next::Nothing)
+        }
+        Dialog::Firewall { t, state, mut top } => {
+            let n = state.as_ref().map_or(0, |s| s.1.len());
+            match code {
+                KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => top = (top + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('k') | KeyCode::Up => top = top.saturating_sub(1),
+                KeyCode::Enter | KeyCode::Char('f') => {
+                    if let Some((on, _)) = &state {
+                        return (Some(Dialog::Sure(sure_firewall(&t, !*on))), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Firewall { t, state, top }), Next::Nothing)
         }
         Dialog::Net { t, nets, mut sel, mut field, mut bridge, mut vlan, mut mac } => {
             let n = nets.as_ref().map_or(0, Vec::len);
@@ -891,6 +925,24 @@ mod tests {
         let Some(Dialog::Sure(s)) = d else { panic!("no question") };
         assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
+        assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_firewall_dialog_toggles_behind_a_question() {
+        let none = |_: &Target| None;
+        let t = target(Kind::Qemu);
+        // Nothing to toggle while it is read.
+        let (d, _) = key(Dialog::Firewall { t: t.clone(), state: None, top: 0 }, KeyCode::Enter, none);
+        assert!(matches!(d, Some(Dialog::Firewall { .. })));
+        let rules = vec![ops::FwRule { pos: 0, enabled: true, line: "in ACCEPT SSH".into() }];
+        let (d, _) = key(Dialog::Firewall { t: t.clone(), state: Some((false, rules.clone())), top: 0 }, KeyCode::Char('f'), none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(s.op, Op::Cmds { label: "firewall 101".into(), cmds: vec![ops::firewall_cmd(&t.node, t.kind, t.id, true)] });
+        assert!(s.lines.iter().any(|l| l.1));
+        // Turning it off has no warning.
+        assert!(!sure_firewall(&t, false).lines.iter().any(|l| l.1));
+        let (d, _) = key(Dialog::Firewall { t, state: Some((true, rules)), top: 0 }, KeyCode::Esc, none);
         assert!(d.is_none());
     }
 

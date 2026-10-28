@@ -429,6 +429,74 @@ pub fn net_cmd(kind: Kind, id: u32, dev: &str, value: &str) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), &format!("--{dev}"), value])
 }
 
+/// One rule of a guest's firewall, as a line to show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FwRule {
+    pub pos: u32,
+    pub enabled: bool,
+    pub line: String,
+}
+
+/// Whether the guest's firewall is on, from the options (`enable` is absent when it was never set).
+pub fn parse_fw_options(json: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return false };
+    match &v["enable"] {
+        Value::Number(n) => n.as_u64().unwrap_or(0) != 0,
+        Value::String(s) => s == "1",
+        Value::Bool(b) => *b,
+        _ => false,
+    }
+}
+
+/// The rules of a guest's firewall in order, each as `in ACCEPT tcp dport 22 from 10.0.0.0/24 # comment`.
+pub fn parse_fw_rules(json: &str) -> Vec<FwRule> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let mut out: Vec<FwRule> = v
+        .as_array()
+        .map(|l| {
+            l.iter()
+                .filter_map(|r| {
+                    let s = |k: &str| r[k].as_str().filter(|x| !x.is_empty());
+                    let mut line = format!("{} {}", s("type")?, s("action")?);
+                    if let Some(m) = s("macro") {
+                        line += &format!(" {m}");
+                    } else if let Some(p) = s("proto") {
+                        line += &format!(" {p}");
+                    }
+                    for (key, word) in [("dport", "dport"), ("sport", "sport"), ("source", "from"), ("dest", "to"), ("iface", "on")] {
+                        if let Some(x) = s(key) {
+                            line += &format!(" {word} {x}");
+                        }
+                    }
+                    if let Some(c) = s("comment") {
+                        line += &format!(" # {c}");
+                    }
+                    Some(FwRule { pos: r["pos"].as_u64().unwrap_or(0) as u32, enabled: r["enable"].as_u64().unwrap_or(0) != 0, line })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by_key(|r| r.pos);
+    out
+}
+
+fn fw_path(node: &str, kind: Kind, id: u32) -> String {
+    format!("/nodes/{node}/{}/{id}/firewall", if kind == Kind::Lxc { "lxc" } else { "qemu" })
+}
+
+/// Whether the firewall of a guest is on and its rules (read-only `pvesh`).
+pub fn firewall(node: &str, kind: Kind, id: u32) -> Option<(bool, Vec<FwRule>)> {
+    let p = fw_path(node, kind, id);
+    let on = parse_fw_options(&pvesh(&format!("{p}/options"), &[])?);
+    let rules = pvesh(&format!("{p}/rules"), &[]).map(|j| parse_fw_rules(&j)).unwrap_or_default();
+    Some((on, rules))
+}
+
+/// `pvesh set .../firewall/options --enable 0|1`.
+pub fn firewall_cmd(node: &str, kind: Kind, id: u32, on: bool) -> Cmd {
+    Cmd::new("pvesh", &["set", &format!("{}/options", fw_path(node, kind, id)), "--enable", if on { "1" } else { "0" }])
+}
+
 /// `qm template` / `pct template`: turn a stopped guest into a template (it can not be started again).
 pub fn template_cmd(kind: Kind, id: u32) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["template", &id.to_string()])
@@ -574,6 +642,20 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_firewall_is_read_and_switched() {
+        assert!(parse_fw_options(r#"{"enable":1,"policy_in":"DROP"}"#));
+        assert!(!parse_fw_options(r#"{"enable":0}"#) && !parse_fw_options("{}") && !parse_fw_options("nope"));
+        let j = r#"[{"pos":1,"type":"in","action":"ACCEPT","enable":1,"macro":"SSH","source":"10.0.0.0/24","comment":"admin"},
+                    {"pos":0,"type":"in","action":"DROP","enable":0,"proto":"tcp","dport":"80"}]"#;
+        let r = parse_fw_rules(j);
+        assert_eq!(r.len(), 2);
+        assert_eq!((r[0].pos, r[0].enabled, r[0].line.as_str()), (0, false, "in DROP tcp dport 80"));
+        assert_eq!(r[1].line, "in ACCEPT SSH from 10.0.0.0/24 # admin");
+        assert_eq!(firewall_cmd("pve", Kind::Lxc, 101, true).args, ["set", "/nodes/pve/lxc/101/firewall/options", "--enable", "1"]);
+        assert_eq!(firewall_cmd("pve", Kind::Qemu, 100, false).args.last().map(String::as_str), Some("0"));
+    }
 
     #[test]
     fn network_devices_are_read_and_rewritten() {

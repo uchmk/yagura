@@ -103,6 +103,7 @@ pub struct Ask {
 }
 
 enum Job {
+    Firewall(u32, Option<(bool, Vec<proxmox::ops::FwRule>)>),
     Cluster(Cluster),
     Inside(u32, Inside),
     Power(u32, Power, Result<(), String>),
@@ -137,7 +138,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -243,6 +244,13 @@ fn run(
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Dump(f) if f.t.id == id))
                     {
                         f.last = Some(size);
+                    }
+                }
+                Job::Firewall(id, r) => {
+                    if let Some(dialog::Dialog::Firewall { state, .. }) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Firewall { t, .. } if t.id == id))
+                    {
+                        *state = Some(r.unwrap_or((false, vec![])));
                     }
                 }
                 Job::Snaps(id, l) => {
@@ -448,6 +456,7 @@ fn run(
             KeyCode::Char('D') if matches!(app.view, View::Guests | View::Graph(_)) => open_destroy(app),
             KeyCode::Char('T') if matches!(app.view, View::Guests | View::Graph(_)) => open_template(app),
             KeyCode::Char('N') if matches!(app.view, View::Guests | View::Graph(_)) => open_net(app, jobs_tx),
+            KeyCode::Char('F') if matches!(app.view, View::Guests | View::Graph(_)) => open_firewall(app, jobs_tx),
             KeyCode::Char('t') if matches!(app.view, View::Guests | View::Graph(_)) => open_console(app),
             KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
             KeyCode::Char(' ') if app.view == View::Guests => {
@@ -635,6 +644,20 @@ fn open_resize(app: &mut App, tx: &Sender<Job>) {
     app.status.clear();
     app.dialog = Some(dialog::Dialog::Resize { t: t.clone(), disks: None, sel: 0, gib: String::new() });
     read_config(t, tx);
+}
+
+/// `F`: the firewall of the guest (on or off, and its rules); read in the background.
+fn open_firewall(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = target(app) else { return };
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Firewall { t: t.clone(), state: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-firewall".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Firewall(t.id, proxmox::ops::firewall(&t.node, t.kind, t.id)));
+        })
+        .expect("spawn the firewall thread");
 }
 
 /// `N`: the network devices of the guest (bridge, VLAN, MAC); the config is read in the background.
