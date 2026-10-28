@@ -170,6 +170,23 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ];
             (" node ".to_string(), l)
         }
+        Dialog::Resize { t, disks, sel, gib } => {
+            let mut l = vec![];
+            match disks {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(d) if d.is_empty() => l.push(Line::styled("no disks found", DIM)),
+                Some(d) => {
+                    for (i, (k, v)) in d.iter().enumerate() {
+                        let st = if i == *sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+                        l.push(Line::styled(format!(" {k:<8} {v}"), st));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::raw(format!("  grow by (GiB): {gib}_")));
+            l.push(Line::styled("j/k disk  digits GiB  Enter ask  Esc cancel", DIM));
+            (format!(" grow a disk of {} {} ", t.id, t.name), l)
+        }
         Dialog::Edit(form) => {
             let field = |i: usize, name: &str, v: &str| {
                 let cur = if form.field == i { "_" } else { "" };
@@ -405,7 +422,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e t n    guest config / set mem+cores / console / node menu;  Storage: Enter backups",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Storage: Enter backups",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -858,7 +875,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         View::Storage => " Tab next  j/k move  Enter backups  ? help  q quit",
         View::Tasks => " Tab host  j/k move  Enter log  x stop  ? help  q quit",
         View::Guests => {
-            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  c config  e edit  t console  n node  ? help  q quit"
+            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  t console  c config  e edit  z disk  n node  ? help  q quit"
         }
         View::Procs => " Tab storage  j/k move  ? help  q quit",
         View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  S snap  b backup  m snaps  c config  t console  ? help  q quit",
@@ -1525,6 +1542,18 @@ mod tests {
     }
 
     #[test]
+    fn the_resize_dialog_draws() {
+        use crate::dialog::Target;
+        let t = Target { id: 100, name: "vm".into(), kind: Kind::Qemu, node: "pve".into(), maxmem: 0, used: 0, template: false };
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Resize { t: t.clone(), disks: None, sel: 0, gib: String::new() });
+        assert!(text(&render(&a)).contains("reading..."));
+        a.dialog = Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), sel: 0, gib: "10".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("scsi0") && s.contains("size=32G") && s.contains("10_"), "{s}");
+    }
+
+    #[test]
     fn the_node_menu_draws() {
         let t = |id| crate::dialog::Target {
             id,
@@ -1572,7 +1601,7 @@ mod tests {
         assert!(text(&render(&app(View::Graph(101)))).contains("t console"));
         let mut a = app(View::Guests);
         a.help = true;
-        assert!(text(&render(&a)).contains("c e t"));
+        assert!(text(&render(&a)).contains("c e z t n"));
     }
 
     #[test]

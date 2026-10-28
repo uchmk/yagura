@@ -341,6 +341,27 @@ pub fn config(node: &str, kind: Kind, id: u32) -> Option<Vec<(String, String)>> 
     pvesh(&format!("/nodes/{node}/{what}/{id}/config"), &[]).map(|j| parse_config(&j)).filter(|c| !c.is_empty())
 }
 
+/// The disks in a guest's configuration as (key, value), e.g. `("scsi0", "local-lvm:vm-100-disk-0,size=32G")`.
+/// CD-ROMs and cloud-init drives are left out; a container's `rootfs` and `mpN` count.
+pub fn disks(kind: Kind, cfg: &[(String, String)]) -> Vec<(String, String)> {
+    let digits = |k: &str, p: &str| k.strip_prefix(p).is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit()));
+    cfg.iter()
+        .filter(|(k, v)| {
+            if kind == Kind::Lxc {
+                k == "rootfs" || digits(k, "mp")
+            } else {
+                ["scsi", "virtio", "sata", "ide"].iter().any(|p| digits(k, p)) && !v.contains("media=cdrom") && !v.contains("cloudinit")
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+/// `qm resize` / `pct resize`: grow a disk by `gib` GiB (a disk cannot be shrunk this way).
+pub fn resize_cmd(kind: Kind, id: u32, disk: &str, gib: u32) -> Cmd {
+    Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["resize", &id.to_string(), disk, &format!("+{gib}G")])
+}
+
 /// The console of a running guest: `qm terminal` for a VM (leave with Ctrl+O), `pct enter` for a container (leave with `exit`).
 pub fn console_cmd(kind: Kind, id: u32) -> Cmd {
     if kind == Kind::Lxc { Cmd::new("pct", &["enter", &id.to_string()]) } else { Cmd::new("qm", &["terminal", &id.to_string()]) }
@@ -437,6 +458,25 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disks_are_picked_from_the_config_and_grown() {
+        let c = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let vm = [
+            c("cores", "2"),
+            c("scsi0", "local-lvm:vm-100-disk-0,size=32G"),
+            c("ide2", "local:iso/x.iso,media=cdrom"),
+            c("ide0", "local-lvm:vm-100-cloudinit,media=cdrom"),
+            c("sata1", "tank:vm-100-disk-1,size=1T"),
+            c("scsihw", "virtio-scsi-pci"),
+        ];
+        let keys: Vec<String> = disks(Kind::Qemu, &vm).into_iter().map(|d| d.0).collect();
+        assert_eq!(keys, ["scsi0", "sata1"]);
+        let ct = [c("rootfs", "local-lvm:vm-101-disk-0,size=8G"), c("mp0", "tank:vm-101-disk-1,mp=/data,size=100G"), c("memory", "512")];
+        assert_eq!(disks(Kind::Lxc, &ct).len(), 2);
+        assert_eq!(resize_cmd(Kind::Lxc, 101, "rootfs", 4).args, ["resize", "101", "rootfs", "+4G"]);
+        assert_eq!(resize_cmd(Kind::Qemu, 100, "scsi0", 10), Cmd::new("qm", &["resize", "100", "scsi0", "+10G"]));
+    }
 
     #[test]
     fn snapshot_commands_and_names() {

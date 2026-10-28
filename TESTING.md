@@ -337,6 +337,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.41 | `n` in the guest list opens the node menu of the node under the cursor, showing how many guests are stopped and running; Esc closes it. |
 | 3p.42 | In the node menu `s` / `d` list the guests and ask y/n, then start / shut them down one after the other; `m` / `M` ask y/n and turn maintenance mode on / off (an error says so on a node without HA). |
 | 3p.43 | The `e` form has four fields (memory, cores, swap, cpu limit; Tab cycles); a container takes swap, a VM ignores it, cpu limit 0 removes the limit; the config view (`c`) shows the new values. |
+| 3p.44 | `z` in the guest list (or the graph screen) lists the guest's disks (no CD-ROM or cloud-init); j/k pick one, digits type GiB, Enter asks y/n and then `qm resize` / `pct resize` grows it; `c` shows the new size. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

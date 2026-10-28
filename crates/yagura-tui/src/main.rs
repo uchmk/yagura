@@ -136,7 +136,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -262,6 +262,11 @@ fn run(
                     };
                 }
                 Job::Config(id, l) => {
+                    if let Some(dialog::Dialog::Resize { t, disks, .. }) =
+                        app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Resize { t, .. } if t.id == id))
+                    {
+                        *disks = Some(proxmox::ops::disks(t.kind, &l));
+                    }
                     if let Some(dialog::Dialog::Config { list, .. }) =
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Config { t, .. } if t.id == id))
                     {
@@ -420,6 +425,7 @@ fn run(
                 open_config(app, jobs_tx)
             }
             KeyCode::Char('e') if app.view == View::Guests => open_edit(app),
+            KeyCode::Char('z') if matches!(app.view, View::Guests | View::Graph(_)) => open_resize(app, jobs_tx),
             KeyCode::Char('n') if app.view == View::Guests => open_node(app),
             KeyCode::Char('t') if matches!(app.view, View::Guests | View::Graph(_)) => open_console(app),
             KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
@@ -555,6 +561,20 @@ fn open_config(app: &mut App, tx: &Sender<Job>) {
     let Some(t) = target(app) else { return };
     app.status.clear();
     app.dialog = Some(dialog::Dialog::Config { t: t.clone(), list: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-config".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Config(t.id, proxmox::ops::config(&t.node, t.kind, t.id).unwrap_or_default()));
+        })
+        .expect("spawn the config thread");
+}
+
+/// `z`: grow a disk of the guest; the config is read in the background to list its disks.
+fn open_resize(app: &mut App, tx: &Sender<Job>) {
+    let Some(t) = target(app) else { return };
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Resize { t: t.clone(), disks: None, sel: 0, gib: String::new() });
     let tx = tx.clone();
     std::thread::Builder::new()
         .name("yagura-config".into())

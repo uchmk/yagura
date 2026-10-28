@@ -124,6 +124,13 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// Grow a disk of a guest: its disks (`None` while the config is read), the cursor and the GiB typed.
+    Resize {
+        t: Target,
+        disks: Option<Vec<(String, String)>>,
+        sel: usize,
+        gib: String,
+    },
     /// Memory and cores to set on these guests.
     Edit(EditForm),
     /// The node menu: maintenance mode, and starting or shutting down every guest of the node.
@@ -353,6 +360,22 @@ pub fn sure_edit(f: &EditForm) -> Option<Sure> {
     Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("set {what}"), cmds }, lines })
 }
 
+/// The last question for growing the disk under the cursor by `gib` GiB; `None` for no disk or a number outside 1..=65536.
+pub fn sure_resize(t: &Target, disks: &[(String, String)], sel: usize, gib: &str) -> Option<Sure> {
+    let (key, value) = disks.get(sel)?;
+    let gib: u32 = gib.parse().ok().filter(|g| (1..=65536).contains(g))?;
+    let lines = vec![
+        (format!("grow {key} of {} {} by {gib} GiB", t.id, t.name), false),
+        (format!("  now {value}"), false),
+        ("a disk cannot be shrunk again; a VM needs its partition and filesystem grown inside the guest".into(), true),
+    ];
+    Some(Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("grow {key} by {gib} GiB"), cmds: vec![ops::resize_cmd(t.kind, t.id, key, gib)] },
+        lines,
+    })
+}
+
 /// The last question for the maintenance mode of a node (HA clusters only; the tool says so otherwise).
 pub fn sure_maintenance(node: &str, on: bool) -> Sure {
     let (verb, note) = if on {
@@ -512,6 +535,28 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => top,
             };
             (Some(Dialog::Config { t, list, top }), Next::Nothing)
+        }
+        Dialog::Resize { t, disks, sel, mut gib } => {
+            let n = disks.as_ref().map_or(0, Vec::len);
+            let stay = |t, disks, sel, gib| (Some(Dialog::Resize { t, disks, sel, gib }), Next::Nothing);
+            match code {
+                KeyCode::Esc => (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => stay(t, disks, (sel + 1).min(n.saturating_sub(1)), gib),
+                KeyCode::Char('k') | KeyCode::Up => stay(t, disks, sel.saturating_sub(1), gib),
+                KeyCode::Char(c) if c.is_ascii_digit() && gib.len() < 5 => {
+                    gib.push(c);
+                    stay(t, disks, sel, gib)
+                }
+                KeyCode::Backspace => {
+                    gib.pop();
+                    stay(t, disks, sel, gib)
+                }
+                KeyCode::Enter => match sure_resize(&t, disks.as_deref().unwrap_or(&[]), sel, &gib) {
+                    Some(s) => (Some(Dialog::Sure(s)), Next::Nothing),
+                    None => stay(t, disks, sel, gib),
+                },
+                _ => stay(t, disks, sel, gib),
+            }
         }
         Dialog::Node { node, stopped, running } => {
             let sure = match code {
@@ -698,6 +743,20 @@ mod tests {
         assert!(matches!(d, Some(Dialog::Node { .. })));
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_resize_dialog_picks_a_disk_and_asks_before_growing() {
+        let none = |_: &Target| None;
+        let disks = vec![("scsi0".to_string(), "a:d0,size=32G".to_string()), ("scsi1".to_string(), "a:d1,size=8G".to_string())];
+        let d = Dialog::Resize { t: target(Kind::Qemu), disks: Some(disks), sel: 0, gib: String::new() };
+        // No number yet: Enter stays.
+        let (d, _) = key(d, KeyCode::Enter, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('j'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('5'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(s.op, Op::Cmds { label: "grow scsi1 by 5 GiB".into(), cmds: vec![ops::resize_cmd(Kind::Qemu, 101, "scsi1", 5)] });
     }
 
     #[test]
