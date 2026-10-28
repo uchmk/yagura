@@ -1114,6 +1114,61 @@ pub fn certificates(now: u64) -> Vec<String> {
     pvesh(&format!("/nodes/{node}/certificates/info"), &[]).map(|j| parse_certs(&j, now)).unwrap_or_default()
 }
 
+/// The names of the nodes in `/nodes`, without `local`, sorted.
+pub fn parse_other_nodes(json: &str, local: &str) -> Vec<String> {
+    let v: Value = serde_json::from_str(json).unwrap_or(Value::Null);
+    let mut out: Vec<String> = v
+        .as_array()
+        .map(|a| a.iter().filter_map(|n| n["node"].as_str()).filter(|n| *n != local).map(String::from).collect())
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// The lines of the ssh page: one per other node, `ok` or why the key login failed.
+pub fn ssh_report(results: &[(String, Result<(), String>)]) -> Vec<String> {
+    if results.is_empty() {
+        return vec!["ssh to the other nodes".into(), "  this is the only node: nothing is run over ssh".into()];
+    }
+    let bad = results.iter().filter(|(_, r)| r.is_err()).count();
+    let mut out = vec![format!("ssh to the other nodes ({} nodes, {bad} not reachable)", results.len())];
+    for (n, r) in results {
+        out.push(match r {
+            Ok(()) => format!("  {n}  ok"),
+            Err(e) => format!("  {n}  CANNOT LOG IN: {e}"),
+        });
+    }
+    if bad > 0 {
+        out.push(String::new());
+        out.push("guest operations on those nodes fail until `ssh root@<node>` works without a password".into());
+        out.push("(on this node: ssh-copy-id root@<node>, or run `pvecm updatecerts` to refresh the cluster keys)".into());
+    }
+    out
+}
+
+/// The command that tries a key login to `node`.
+pub fn ssh_probe_cmd(node: &str) -> Option<Cmd> {
+    let ok = !node.is_empty() && node.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'));
+    ok.then(|| Cmd::new("ssh", &["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", &format!("root@{node}"), "true"]))
+}
+
+/// Try `ssh root@<node> true` for every other node of the cluster.
+pub fn ssh_check() -> Vec<String> {
+    let local = this_node();
+    let nodes = pvesh("/nodes", &[]).map(|j| parse_other_nodes(&j, &local)).unwrap_or_default();
+    let results: Vec<(String, Result<(), String>)> = nodes
+        .into_iter()
+        .map(|n| {
+            let r = match ssh_probe_cmd(&n) {
+                Some(c) => run(&c.prog, &c.args),
+                None => Err("bad node name".into()),
+            };
+            (n, r)
+        })
+        .collect();
+    ssh_report(&results)
+}
+
 /// The lines of the disk page from `/nodes/<n>/disks/list`; `smart` answers `/nodes/<n>/disks/smart` for a device path. Each disk
 /// shows its model, size, kind, health and wearout, then the SMART values that matter (ATA attributes or NVMe log lines).
 /// A health other than PASSED/OK/UNKNOWN is marked UNHEALTHY.
@@ -2249,6 +2304,21 @@ mod tests {
         // A node name that is not a host name is never put on a command line.
         assert_eq!(remote_cmd("pve", "x; rm -rf /", qm(), false), qm());
         assert_eq!(remote_cmd("pve", "-oProxyCommand=x", Cmd::new("pct", &["enter", "1"]), false).prog, "pct");
+    }
+
+    #[test]
+    fn ssh_to_the_other_nodes_is_reported() {
+        let j = r#"[{"node":"pve2"},{"node":"pve"},{"node":"pve3"}]"#;
+        assert_eq!(parse_other_nodes(j, "pve"), ["pve2", "pve3"]);
+        assert!(parse_other_nodes("nope", "pve").is_empty());
+        assert_eq!(ssh_report(&[])[1], "  this is the only node: nothing is run over ssh");
+        let r = ssh_report(&[("pve2".into(), Ok(())), ("pve3".into(), Err("Permission denied".into()))]);
+        assert_eq!(r[0], "ssh to the other nodes (2 nodes, 1 not reachable)");
+        assert_eq!((r[1].as_str(), r[2].as_str()), ("  pve2  ok", "  pve3  CANNOT LOG IN: Permission denied"));
+        assert!(r.iter().any(|l| l.contains("ssh-copy-id")));
+        assert!(!ssh_report(&[("a".into(), Ok(()))]).iter().any(|l| l.contains("ssh-copy-id")));
+        assert_eq!(ssh_probe_cmd("pve2").unwrap().args.last().unwrap(), "true");
+        assert!(ssh_probe_cmd("a b").is_none() && ssh_probe_cmd("").is_none());
     }
 
     #[test]

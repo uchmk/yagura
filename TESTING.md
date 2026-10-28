@@ -384,6 +384,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.88 | `p` on a backup job opens the six keep-* counts filled from the job; digits only, Tab moves, a wrong value shows a red reason; Enter asks y/n (red line: older backups are deleted at the next run) and runs `pvesh set /cluster/backup/<id> --prune-backups ...`; all empty runs `--delete prune-backups`. |
 | 3p.89 | With `webhook_format = "ntfy"` a new alert is POSTed to the ntfy address as plain text with a Title and Priority header (checked against ntfy.sh); the default json is unchanged. |
 | 3p.90 | On a cluster, a guest on another node: a snapshot, `e` set, `M` move or `c` console runs through `ssh root@<node>` (needs key login between the nodes); a guest on this node and a single-node host never use ssh. |
+| 3p.91 | `S` in the host screen lists every other node with `ok`, or `CANNOT LOG IN: <reason>` and a hint when key login fails; on a single node it says nothing is run over ssh. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

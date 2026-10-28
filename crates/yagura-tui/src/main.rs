@@ -675,6 +675,7 @@ fn run(
             KeyCode::Char('X') if app.view == View::Host => open_node_settings(app, jobs_tx),
             KeyCode::Char('U') if app.view == View::Host => open_apt(app, jobs_tx),
             KeyCode::Char('K') if app.view == View::Host => open_certs(app, jobs_tx),
+            KeyCode::Char('S') if app.view == View::Host => open_ssh(app, jobs_tx),
             KeyCode::Char('D') if app.view == View::Host => open_disks(app, jobs_tx),
             KeyCode::Char('N') if app.view == View::Host => open_network(app, jobs_tx),
             KeyCode::Char('W') if app.view == View::Host => open_node_edit(app, jobs_tx),
@@ -1241,6 +1242,20 @@ fn open_certs(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Text(TITLE, proxmox::ops::certificates(now)));
         })
         .expect("spawn the certificates thread");
+}
+
+/// `S` in the host screen: whether this node can log in to the other nodes over ssh with a key (read only).
+fn open_ssh(app: &mut App, tx: &Sender<Job>) {
+    const TITLE: &str = "ssh to the other nodes";
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Text { title: TITLE.into(), lines: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-ssh".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Text(TITLE, proxmox::ops::ssh_check()));
+        })
+        .expect("spawn the ssh thread");
 }
 
 /// `U` in the host screen: the package updates waiting on this node (read only); `V` refreshes the lists (asks first).

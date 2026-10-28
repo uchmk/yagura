@@ -935,7 +935,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x  f    clean up old snapshots and backups / stop a task (Tasks) (asks first) / step the Tasks filter (failed, running, 24 h, 7 d)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F M O Q B  clone / delete / template / network / firewall / migrate / add to HA / remove from HA / boot options;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART, N network, I upgrade packages;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F M O Q B  clone / delete / template / network / firewall / migrate / add to HA / remove from HA / boot options;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, S ssh to the other nodes, D disks and SMART, N network, I upgrade packages;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
