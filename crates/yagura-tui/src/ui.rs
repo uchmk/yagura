@@ -135,6 +135,34 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("j/k move  d delete  r roll back (asks first)  Esc close", DIM));
             (format!(" snapshots of {} {} ", t.id, t.name), l)
         }
+        Dialog::Backups { storage, list, sel, marks, .. } => {
+            let mut l = vec![];
+            match list {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(b) if b.is_empty() => l.push(Line::styled("no backups", DIM)),
+                Some(b) => {
+                    // Keep the cursor in view: show a window of rows around it.
+                    let room = (f.area().height as usize).saturating_sub(8).clamp(3, 20);
+                    let top = sel.saturating_sub(room - 1).min(b.len().saturating_sub(room));
+                    for (i, x) in b.iter().enumerate().skip(top).take(room) {
+                        let mark = if marks.contains(&i) { "*" } else { " " };
+                        let prot = if x.protected { " protected" } else { "" };
+                        let st = if i == *sel { SELECTED } else { Style::new() };
+                        let file = x.volid.rsplit('/').next().unwrap_or(&x.volid);
+                        l.push(Line::styled(
+                            format!("{mark} {:>5} {} {:>9}  {file}{prot}", x.vmid, crate::dialog::stamp(x.ctime), bytes(x.size)),
+                            st,
+                        ));
+                    }
+                    if b.len() > room {
+                        l.push(Line::styled(format!("  {} of {}", sel + 1, b.len()), DIM));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("j/k move  Space mark  d delete  r restore as a new guest (asks first)  Esc close", DIM));
+            (format!(" backups on {storage} "), l)
+        }
         Dialog::Sure(s) => {
             let mut l: Vec<Line> = s
                 .lines
@@ -745,7 +773,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     }
     let keys = match app.view {
         View::Host => " Tab guests  ? help  q quit",
-        View::Storage => " Tab next  j/k move  ? help  q quit",
+        View::Storage => " Tab next  j/k move  Enter backups  ? help  q quit",
         View::Tasks => " Tab host  j/k move  Enter log  x stop  ? help  q quit",
         View::Guests => {
             " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  ? help  q quit"
@@ -1358,6 +1386,35 @@ mod tests {
         a.dialog = Some(Dialog::Sure(Sure { t, op: Op::Snap(SnapOp::Delete("old".into())), lines }));
         let s = text(&render(&a));
         assert!(s.contains("sure?") && s.contains("NOT ENOUGH"), "{s}");
+    }
+
+    #[test]
+    fn the_backup_list_draws_marks_and_protection() {
+        use crate::dialog::Dialog;
+        use yagura_core::proxmox::ops::Backup;
+        let b = |n: u32, protected| Backup {
+            volid: format!("nas:backup/vzdump-lxc-{n}-x.tar.zst"),
+            storage: "nas".into(),
+            node: "pve".into(),
+            vmid: n,
+            ctime: 1_793_178_900,
+            size: 1 << 30,
+            protected,
+            notes: String::new(),
+        };
+        let mut a = app(View::Storage);
+        a.dialog = Some(Dialog::Backups { node: "pve".into(), storage: "nas".into(), list: None, sel: 0, marks: Default::default() });
+        assert!(text(&render(&a)).contains("reading..."));
+        a.dialog = Some(Dialog::Backups {
+            node: "pve".into(),
+            storage: "nas".into(),
+            list: Some(vec![b(100, false), b(101, true)]),
+            sel: 0,
+            marks: [1usize].into_iter().collect(),
+        });
+        let s = text(&render(&a));
+        assert!(s.contains("backups on nas") && s.contains("2026-10-28 09:15") && s.contains("protected"), "{s}");
+        assert!(s.contains("* "), "{s}");
     }
 
     #[test]

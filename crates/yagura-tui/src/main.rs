@@ -115,6 +115,10 @@ enum Job {
     Op(u32, String, Result<(), String>),
     /// What the cleanup scan found to remove.
     Cleanup(Vec<proxmox::ops::Item>),
+    /// The backup files of a storage (node, storage, list).
+    Backups(String, String, Vec<proxmox::ops::Backup>),
+    /// A free guest id for restoring this backup.
+    RestoreId(proxmox::ops::Backup, Option<u32>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -124,7 +128,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  x stop task  l logs  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  x stop task  Enter (storage) backups  l logs  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -247,6 +251,22 @@ fn run(
                         Err(e) => format!("{label} failed: {e}"),
                     };
                 }
+                Job::Backups(n, s, l) => {
+                    if let Some(dialog::Dialog::Backups { list, .. }) = app
+                        .dialog
+                        .as_mut()
+                        .filter(|d| matches!(d, dialog::Dialog::Backups { node, storage, .. } if *node == n && *storage == s))
+                    {
+                        *list = Some(l);
+                    }
+                }
+                Job::RestoreId(b, id) => match id.and_then(|id| dialog::sure_restore(&b, id)) {
+                    Some(s) => {
+                        app.status.clear();
+                        app.dialog = Some(dialog::Dialog::Sure(s));
+                    }
+                    None => app.status = "restore: no free guest id, or this file is not a guest backup".into(),
+                },
                 Job::Cleanup(items) => {
                     app.cleaning = false;
                     let c = config::get();
@@ -426,6 +446,7 @@ fn run(
             KeyCode::Char('s') if !matches!(app.view, View::Graph(_)) => app.sort = app.sort.next(),
             KeyCode::Enter if app.view == View::Guests => open_graphs(app),
             KeyCode::Enter if app.view == View::Tasks => open_task_log(app, jobs_tx),
+            KeyCode::Enter if app.view == View::Storage => open_backups(app, jobs_tx),
             _ => {}
         }
     }
@@ -496,6 +517,26 @@ fn open_snaps(app: &mut App, tx: &Sender<Job>) {
         .expect("spawn the snapshots thread");
 }
 
+/// Enter in the storage screen: the backup files of the storage under the cursor, read in the background.
+fn open_backups(app: &mut App, tx: &Sender<Job>) {
+    let Some(s) = app.model.storages_sorted().get(app.selected).map(|s| (*s).clone()) else { return };
+    if !s.content.split(',').any(|c| c == "backup") {
+        app.status = format!("{} holds no backups", s.name);
+        return;
+    }
+    app.status.clear();
+    app.dialog =
+        Some(dialog::Dialog::Backups { node: s.node.clone(), storage: s.name.clone(), list: None, sel: 0, marks: Default::default() });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-backups".into())
+        .spawn(move || {
+            let l = proxmox::ops::backups(&s.node, &s.name);
+            let _ = tx.send(Job::Backups(s.node, s.name, l));
+        })
+        .expect("spawn the backups thread");
+}
+
 /// `x` in the task screen: ask before stopping the running task under the cursor.
 fn open_stop(app: &mut App) {
     let Some(t) = app.model.host_tasks.get(app.selected) else { return };
@@ -546,6 +587,17 @@ fn dialog_key(app: &mut App, code: KeyCode, tx: &Sender<Job>) {
     let Some(d) = app.dialog.take() else { return };
     let (next, run) = dialog::key(d, code, |t| snap_free(&app.model, t));
     app.dialog = next;
+    if let dialog::Next::Restore(b) = run {
+        app.status = "restore: looking for a free guest id...".into();
+        let tx = tx.clone();
+        std::thread::Builder::new()
+            .name("yagura-nextid".into())
+            .spawn(move || {
+                let _ = tx.send(Job::RestoreId(b, proxmox::ops::next_id()));
+            })
+            .expect("spawn the next id thread");
+        return;
+    }
     let dialog::Next::Run(t, op) = run else { return };
     let label = op.label(&t);
     app.status = format!("{label}: running (a backup shows in the Tasks screen)");

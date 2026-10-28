@@ -2,8 +2,10 @@
 //! compression), the snapshot list (delete, roll back) and the last y/n that shows what it costs. Pure state and keys; the
 //! main loop opens them and runs the answer on a thread of its own.
 
+use std::collections::BTreeSet;
+
 use ratatui::crossterm::event::KeyCode;
-use yagura_core::proxmox::ops::{self, Cmd, Compress, Dump, Item, Mode, Snap, SnapOp};
+use yagura_core::proxmox::ops::{self, Backup, Cmd, Compress, Dump, Item, Mode, Snap, SnapOp};
 use yagura_core::proxmox::{Guest, HostTask, Kind, Storage};
 
 use crate::model::bytes;
@@ -100,10 +102,28 @@ pub struct Sure {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dialog {
-    Name { t: Target, text: String },
-    Ram { t: Target, name: String },
+    Name {
+        t: Target,
+        text: String,
+    },
+    Ram {
+        t: Target,
+        name: String,
+    },
     Dump(DumpForm),
-    Snaps { t: Target, list: Option<Vec<Snap>>, sel: usize },
+    Snaps {
+        t: Target,
+        list: Option<Vec<Snap>>,
+        sel: usize,
+    },
+    /// The backup files of a storage: the list (`None` while it is read), the cursor and the marked rows.
+    Backups {
+        node: String,
+        storage: String,
+        list: Option<Vec<Backup>>,
+        sel: usize,
+        marks: BTreeSet<usize>,
+    },
     Sure(Sure),
 }
 
@@ -111,6 +131,54 @@ pub enum Dialog {
 pub enum Next {
     Nothing,
     Run(Target, Op),
+    /// Restore this backup: the main loop looks up a free guest id first.
+    Restore(Backup),
+}
+
+/// `YYYY-MM-DD HH:MM` (UTC) of a Unix time.
+pub fn stamp(t: u64) -> String {
+    let (y, m, d) = civil((t / 86_400) as i64);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}", t % 86_400 / 3600, t % 3600 / 60)
+}
+
+/// The file name of a backup without the storage prefix.
+fn file(b: &Backup) -> &str {
+    b.volid.rsplit('/').next().unwrap_or(&b.volid)
+}
+
+/// The last question for deleting backup files; protected ones are left out. `None` when nothing is left.
+pub fn sure_backup_delete(picked: &[&Backup]) -> Option<Sure> {
+    let (prot, go): (Vec<&Backup>, Vec<&Backup>) = picked.iter().partition(|b| b.protected);
+    if go.is_empty() {
+        return None;
+    }
+    let mut lines = vec![(format!("delete {} backup files from {}", go.len(), go[0].storage), false)];
+    for b in go.iter().take(LISTED) {
+        lines.push((format!("  {} {}  ({})", b.vmid, file(b), bytes(b.size)), false));
+    }
+    if go.len() > LISTED {
+        lines.push((format!("  ... and {} more", go.len() - LISTED), false));
+    }
+    if !prot.is_empty() {
+        lines.push((format!("{} protected backups are left alone", prot.len()), false));
+    }
+    lines.push((format!("gives back about {}; a deleted backup can not be brought back", bytes(go.iter().map(|b| b.size).sum())), true));
+    let label = format!("delete {} backups", go.len());
+    let cmds = go.iter().map(|b| ops::backup_delete_cmd(b)).collect();
+    Some(Sure { t: Target::none(), op: Op::Cmds { label, cmds }, lines })
+}
+
+/// The last question for restoring a backup as the new guest `newid` (never over an existing one).
+pub fn sure_restore(b: &Backup, newid: u32) -> Option<Sure> {
+    let cmd = ops::restore_cmd(b, newid, None)?;
+    let kind = if b.kind() == Some(Kind::Lxc) { "container" } else { "VM" };
+    let lines = vec![
+        (format!("restore {} as a new {kind} {newid}", file(b)), false),
+        (format!("the backup of {} taken {} UTC, {}", b.vmid, stamp(b.ctime), bytes(b.size)), false),
+        (format!("{newid} is a free id: no existing guest is touched; the copy needs about {} on its storage", bytes(b.size)), false),
+        ("the new guest starts stopped; give it a different network address before starting it".into(), true),
+    ];
+    Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("restore as {newid}"), cmds: vec![cmd] }, lines })
 }
 
 /// The name a new snapshot gets unless the user types one.
@@ -309,6 +377,35 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => (Some(Dialog::Snaps { t, list, sel }), Next::Nothing),
             }
         }
+        Dialog::Backups { node, storage, list, sel, mut marks } => {
+            let n = list.as_ref().map_or(0, Vec::len);
+            let stay = |node, storage, list, sel, marks| (Some(Dialog::Backups { node, storage, list, sel, marks }), Next::Nothing);
+            match code {
+                KeyCode::Esc | KeyCode::Char('q') => (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => stay(node, storage, list, (sel + 1).min(n.saturating_sub(1)), marks),
+                KeyCode::Char('k') | KeyCode::Up => stay(node, storage, list, sel.saturating_sub(1), marks),
+                KeyCode::Char(' ') if sel < n => {
+                    if !marks.remove(&sel) {
+                        marks.insert(sel);
+                    }
+                    stay(node, storage, list, (sel + 1).min(n - 1), marks)
+                }
+                KeyCode::Char('d') if n > 0 => {
+                    let l = list.as_deref().unwrap_or(&[]);
+                    let picked: Vec<&Backup> =
+                        if marks.is_empty() { l.get(sel).into_iter().collect() } else { marks.iter().filter_map(|i| l.get(*i)).collect() };
+                    match sure_backup_delete(&picked) {
+                        Some(s) => (Some(Dialog::Sure(s)), Next::Nothing),
+                        None => stay(node, storage, list, sel, marks),
+                    }
+                }
+                KeyCode::Char('r') if n > 0 => match list.as_ref().and_then(|l| l.get(sel)).filter(|b| b.kind().is_some()) {
+                    Some(b) => (None, Next::Restore(b.clone())),
+                    None => stay(node, storage, list, sel, marks),
+                },
+                _ => stay(node, storage, list, sel, marks),
+            }
+        }
         Dialog::Sure(s) => match code {
             KeyCode::Char('y') => (None, Next::Run(s.t, s.op)),
             _ => (None, Next::Nothing),
@@ -373,6 +470,46 @@ mod tests {
         assert!(s.lines[1].1);
         let (d, n) = key(Dialog::Sure(s), KeyCode::Char('n'), |_| None);
         assert!(d.is_none() && matches!(n, Next::Nothing));
+    }
+
+    #[test]
+    fn backup_list_deletes_and_restores_behind_questions() {
+        let b = |n: u32, ctime, protected| Backup {
+            volid: format!("nas:backup/vzdump-lxc-{n}-x.tar.zst"),
+            storage: "nas".into(),
+            node: "pve".into(),
+            vmid: n,
+            ctime,
+            size: 1 << 30,
+            protected,
+            notes: String::new(),
+        };
+        let none = |_: &Target| None;
+        let open = |marks: &[usize]| Dialog::Backups {
+            node: "pve".into(),
+            storage: "nas".into(),
+            list: Some(vec![b(100, 3, false), b(101, 2, true), b(102, 1, false)]),
+            sel: 0,
+            marks: marks.iter().copied().collect(),
+        };
+        // Space marks and moves on; d asks about the marked rows and leaves the protected one out.
+        let (d, _) = key(open(&[]), KeyCode::Char(' '), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char(' '), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('j'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('d'), none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        let Op::Cmds { cmds, .. } = &s.op else { panic!("not commands") };
+        assert_eq!(cmds.len(), 1);
+        assert!(s.lines.iter().any(|(l, _)| l.contains("1 protected")));
+        // Only a protected backup under the cursor: nothing to ask, the list stays.
+        let (d, _) = key(open(&[]), KeyCode::Char('j'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('d'), none);
+        assert!(matches!(d, Some(Dialog::Backups { .. })));
+        let (d, n) = key(open(&[]), KeyCode::Char('r'), none);
+        assert!(d.is_none() && matches!(n, Next::Restore(x) if x.vmid == 100));
+        let s = sure_restore(&b(100, 1_793_178_900, false), 120).unwrap();
+        assert!(s.lines[1].0.contains("2026-10-28 09:15"));
+        assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds[0].prog == "pct" && cmds[0].args[1] == "120"));
     }
 
     #[test]
