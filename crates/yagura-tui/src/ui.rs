@@ -434,6 +434,28 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
             (format!(" time and DNS of {node} "), l)
         }
+        Dialog::StorageAdd { step, vals, err } => {
+            const NAMES: [&str; 4] = ["name", "server", "export", "content"];
+            const HINTS: [&str; 4] = [
+                "the storage name, like nas-1",
+                "the NFS server: a host name or an IP address",
+                "the path the server shares, like /export/pve",
+                "images, rootdir, vztmpl, iso, backup, snippets (comma separated)",
+            ];
+            let mut l = vec![];
+            for (i, n) in NAMES.iter().enumerate() {
+                let cur = i == *step;
+                let st = if cur { Style::new().add_modifier(Modifier::BOLD) } else { DIM };
+                l.push(Line::styled(format!("  {n:<8} {}{}", vals[i], if cur { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled(HINTS[*step], DIM));
+            if !err.is_empty() {
+                l.push(Line::styled(err.clone(), RED));
+            }
+            l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
+            (" add an NFS storage ".to_string(), l)
+        }
         Dialog::JobEdit { id, step, vals, err } => {
             const NAMES: [&str; 4] = ["storage", "schedule", "guests", "mode"];
             const HINTS: [&str; 4] = [
@@ -705,7 +727,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x  f    clean up old snapshots and backups / stop a task (Tasks) (asks first) / step the Tasks filter (failed, running, 24 h, 7 d)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1155,7 +1177,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     }
     let keys = match app.view {
         View::Host => " Tab guests  ? help  q quit",
-        View::Storage => " Tab next  j/k move  Enter backups  ? help  q quit",
+        View::Storage => " Tab next  j/k move  Enter backups  n add NFS  X remove  ? help  q quit",
         View::Tasks => " Tab host  j/k move  Enter log  x stop  f show  / find  ? help  q quit",
         View::Guests => {
             " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  t console  c config  e edit  z disk  n node  ? help  q quit"
@@ -1935,6 +1957,15 @@ mod tests {
         a.dialog = Some(Dialog::Text { title: "cluster and node firewall".into(), lines: Some(lines), top: 0 });
         let s = text(&render(&a));
         assert!(s.contains("cluster and node firewall") && s.contains("firewall OFF") && s.contains("no rules"), "{s}");
+    }
+
+    #[test]
+    fn the_storage_form_draws() {
+        let mut a = app(View::Storage);
+        let vals = ["nas-1", "10.0.0.5", "/export", "backup"].map(String::from);
+        a.dialog = Some(Dialog::StorageAdd { step: 2, vals, err: "the export is a path on the server like /export/pve".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("add an NFS storage") && s.contains("10.0.0.5") && s.contains("the export is a path"), "{s}");
     }
 
     #[test]

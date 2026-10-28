@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-301 rows to press (301 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+302 rows to press (302 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -317,6 +317,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.67** `D` in the host screen lists the node's disks with model, size, health and wearout and the main SMART values; a health other than PASSED or OK reads UNHEALTHY in red.
 - [ ] **3p.68** `W` in the host screen opens a five-field form (time zone, search domain, dns1 to dns3) filled with the current values; the last Enter asks y/n before the two pvesh set calls run, and a bad zone or IP is refused with a reason.
 - [ ] **3p.69** `L` in the host screen shows the cluster and node firewall: on or off (OFF in red), the default policies and the rules in order, disabled rules marked off.
+- [ ] **3p.70** In the Storage screen, `n` walks through name, server, export and content and asks y/n before `pvesh create /storage --type nfs`; a bad name, path or content is refused with a reason. `X` asks y/n before `pvesh delete /storage/<name>`, with a red warning when the storage holds guest disks.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

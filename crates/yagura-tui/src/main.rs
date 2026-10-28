@@ -148,7 +148,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -590,6 +590,17 @@ fn run(
             KeyCode::Enter if app.view == View::Storage => open_backups(app, jobs_tx),
             KeyCode::Char('i') if app.view == View::Storage => open_content(app, jobs_tx),
             KeyCode::Char('J') if app.view == View::Storage => open_jobs(app, jobs_tx),
+            KeyCode::Char('n') if app.view == View::Storage => {
+                app.status.clear();
+                let vals = ["", "", "/", "backup,iso,vztmpl"].map(String::from);
+                app.dialog = Some(dialog::Dialog::StorageAdd { step: 0, vals, err: String::new() });
+            }
+            KeyCode::Char('X') if app.view == View::Storage => {
+                if let Some(s) = app.model.storages_sorted().get(app.selected).map(|s| (*s).clone()) {
+                    app.status.clear();
+                    app.dialog = Some(dialog::Dialog::Sure(dialog::sure_storage_remove(&s)));
+                }
+            }
             KeyCode::Char('A') if app.view == View::Host => open_access(app, jobs_tx),
             KeyCode::Char('E') if app.view == View::Host => open_ha(app, jobs_tx),
             KeyCode::Char('R') if app.view == View::Host => open_replication(app, jobs_tx),

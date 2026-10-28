@@ -168,6 +168,12 @@ pub enum Dialog {
         vals: [String; 5],
         err: String,
     },
+    /// Adding an NFS storage: the fields name, server, export and content, the one being typed, and what was wrong with the last try.
+    StorageAdd {
+        step: usize,
+        vals: [String; 4],
+        err: String,
+    },
     /// Everything on a storage (`None` while it is read), the cursor, and how full the storage is (used, total).
     Content {
         node: String,
@@ -571,6 +577,29 @@ pub fn sure_node_save(node: &str, vals: &[String; 5], cmds: Vec<ops::Cmd>) -> Su
     Sure { t: Target::none(), op: Op::Cmds { label: format!("time and DNS of {node}"), cmds }, lines }
 }
 
+/// The last question for adding an NFS storage.
+pub fn sure_storage_add(vals: &[String; 4], cmd: ops::Cmd) -> Sure {
+    let lines = vec![
+        (format!("add the NFS storage {} ({}:{}) for {}", vals[0].trim(), vals[1].trim(), vals[2].trim(), vals[3].trim()), false),
+        ("every node of the cluster will try to mount it".into(), false),
+    ];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("add storage {}", vals[0].trim()), cmds: vec![cmd] }, lines }
+}
+
+/// The last question for removing a storage definition.
+pub fn sure_storage_remove(s: &Storage) -> Sure {
+    let mut lines = vec![(format!("remove the storage {} ({}) from the cluster", s.name, s.kind), false)];
+    if s.content.split(',').any(|c| c == "images" || c == "rootdir") {
+        lines.push(("guests with disks on it can no longer start".into(), true));
+    }
+    lines.push(("only the definition goes; the files on it stay where they are".into(), false));
+    Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("remove storage {}", s.name), cmds: vec![ops::storage_remove_cmd(&s.name)] },
+        lines,
+    }
+}
+
 /// The last question for deleting one volume of a storage.
 pub fn sure_vol(v: &ops::Vol) -> Sure {
     let mut lines = vec![(format!("delete {} ({}, {})", v.volid, v.content, bytes(v.size)), false)];
@@ -957,6 +986,33 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => {}
             }
             (Some(Dialog::NodeEdit { node, step, vals, err }), Next::Nothing)
+        }
+        Dialog::StorageAdd { mut step, mut vals, mut err } => {
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Char(c) if !c.is_control() && vals[step].chars().count() < 80 => vals[step].push(c),
+                KeyCode::Backspace => {
+                    if vals[step].is_empty() && step > 0 {
+                        step -= 1;
+                    } else {
+                        vals[step].pop();
+                    }
+                }
+                KeyCode::Enter if step < 3 => {
+                    if vals[step].trim().is_empty() {
+                        err = "this field cannot be empty".into();
+                    } else {
+                        step += 1;
+                        err.clear();
+                    }
+                }
+                KeyCode::Enter => match ops::storage_add_nfs_cmd(&vals) {
+                    Ok(cmd) => return (Some(Dialog::Sure(sure_storage_add(&vals, cmd))), Next::Nothing),
+                    Err(e) => err = e,
+                },
+                _ => {}
+            }
+            (Some(Dialog::StorageAdd { step, vals, err }), Next::Nothing)
         }
         Dialog::Content { node, storage, fill, list, mut sel } => {
             let n = list.as_ref().map_or(0, Vec::len);
@@ -1410,6 +1466,37 @@ mod tests {
         assert!(matches!(&s.op, Op::Cmds { label, cmds } if label == "run job backup-1" && cmds[0].args[1].ends_with("/vzdump")));
         // Esc leaves the form.
         let (d, _) = key(Dialog::JobEdit { id: None, step: 0, vals: Default::default(), err: String::new() }, KeyCode::Esc, none);
+        assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_storage_forms_ask_before_adding_or_removing() {
+        let none = |_: &Target| None;
+        let form = |step, vals: [&str; 4]| Dialog::StorageAdd { step, vals: vals.map(String::from), err: String::new() };
+        let (d, _) = key(form(0, ["", "", "/", "backup"]), KeyCode::Enter, none);
+        let Some(Dialog::StorageAdd { step: 0, err, .. }) = d else { panic!("moved on with no name") };
+        assert!(!err.is_empty());
+        let (d, _) = key(form(3, ["nas", "10.0.0.5", "/export", "backup"]), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(matches!(&s.op, Op::Cmds { label, cmds } if label == "add storage nas" && cmds[0].args[0] == "create"));
+        let (d, _) = key(form(3, ["nas", "10.0.0.5", "/export", "movies"]), KeyCode::Enter, none);
+        let Some(Dialog::StorageAdd { err, .. }) = d else { panic!("accepted a wrong content") };
+        assert!(err.contains("content"), "{err}");
+        let st = Storage {
+            name: "nas".into(),
+            node: "pve".into(),
+            used: 0,
+            total: 0,
+            active: true,
+            kind: "nfs".into(),
+            content: "images,backup".into(),
+        };
+        let s = sure_storage_remove(&st);
+        assert!(s.lines.iter().any(|(l, red)| *red && l.contains("can no longer start")), "{:?}", s.lines);
+        assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds[0].args == ["delete", "/storage/nas"]));
+        let st = Storage { content: "backup".into(), ..st };
+        assert!(sure_storage_remove(&st).lines.iter().all(|(_, red)| !red));
+        let (d, _) = key(form(1, ["a", "", "", ""]), KeyCode::Esc, none);
         assert!(d.is_none());
     }
 

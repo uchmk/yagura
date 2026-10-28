@@ -783,6 +783,36 @@ pub fn node_save_cmds(node: &str, fields: &[String; 5]) -> Result<Vec<Cmd>, Stri
     Ok(vec![Cmd::new("pvesh", &["set", &format!("/nodes/{node}/time"), "--timezone", zone]), Cmd::new("pvesh", &dns)])
 }
 
+/// The call that adds an NFS storage to the cluster from `[name, server, export, content]`. The content is a comma list of
+/// images, rootdir, vztmpl, iso, backup and snippets.
+pub fn storage_add_nfs_cmd(fields: &[String; 4]) -> Result<Cmd, String> {
+    let [name, server, export, content] = fields.each_ref().map(|s| s.trim());
+    let word = |s: &str, extra: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c));
+    if !word(name, "._-") || !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return Err("the storage name is like nas-1 (letters, digits, . _ -)".into());
+    }
+    if !word(server, ".-:") || server.starts_with('-') {
+        return Err("the server is a host name or an IP address".into());
+    }
+    if !word(export, "/._-") || !export.starts_with('/') || export.contains("..") {
+        return Err("the export is a path on the server like /export/pve".into());
+    }
+    let kinds = ["images", "rootdir", "vztmpl", "iso", "backup", "snippets"];
+    if content.is_empty() || !content.split(',').all(|c| kinds.contains(&c)) {
+        return Err("the content is a list of images, rootdir, vztmpl, iso, backup, snippets".into());
+    }
+    Ok(Cmd::new(
+        "pvesh",
+        &["create", "/storage", "--storage", name, "--type", "nfs", "--server", server, "--export", export, "--content", content],
+    ))
+}
+
+/// The call that removes a storage definition from the cluster (the data on it is not touched).
+pub fn storage_remove_cmd(name: &str) -> Cmd {
+    let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+    Cmd::new("pvesh", &["delete", &format!("/storage/{}", if ok { name } else { "invalid" })])
+}
+
 /// The lines of the node page: the clock (`/nodes/<n>/time`), the resolver (`/dns`) and the hosts file (`/hosts`).
 pub fn parse_node_settings(time: &str, dns: &str, hosts: &str) -> Vec<String> {
     let j = |s: &str| serde_json::from_str::<Value>(s).unwrap_or(Value::Null);
@@ -1443,6 +1473,43 @@ mod tests {
         assert_eq!(l[2], "   1  in ACCEPT tcp dport 22");
         let l = parse_fw_level("node pve", "{}", "[]");
         assert_eq!(l, ["node pve firewall OFF  policy in default, out default", "  no rules"]);
+    }
+
+    #[test]
+    fn an_nfs_storage_is_added_and_removed_by_name() {
+        let f = |a: [&str; 4]| a.map(String::from);
+        let c = storage_add_nfs_cmd(&f(["nas-1", "10.0.0.5", "/export/pve", "backup,iso"])).unwrap();
+        assert_eq!(
+            c.args,
+            [
+                "create",
+                "/storage",
+                "--storage",
+                "nas-1",
+                "--type",
+                "nfs",
+                "--server",
+                "10.0.0.5",
+                "--export",
+                "/export/pve",
+                "--content",
+                "backup,iso"
+            ]
+        );
+        for bad in [
+            ["", "s", "/e", "backup"],
+            ["-x", "s", "/e", "backup"],
+            ["n", "", "/e", "backup"],
+            ["n", "s;rm", "/e", "backup"],
+            ["n", "s", "e", "backup"],
+            ["n", "s", "/a/../b", "backup"],
+            ["n", "s", "/e", "backup,movies"],
+            ["n", "s", "/e", ""],
+        ] {
+            assert!(storage_add_nfs_cmd(&f(bad)).is_err(), "{bad:?}");
+        }
+        assert_eq!(storage_remove_cmd("nas-1").args, ["delete", "/storage/nas-1"]);
+        assert_eq!(storage_remove_cmd("a b").args, ["delete", "/storage/invalid"]);
     }
 
     #[test]

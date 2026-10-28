@@ -363,6 +363,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.67 | `D` in the host screen lists the node's disks with model, size, health and wearout and the main SMART values; a health other than PASSED or OK reads UNHEALTHY in red. |
 | 3p.68 | `W` in the host screen opens a five-field form (time zone, search domain, dns1 to dns3) filled with the current values; the last Enter asks y/n before the two pvesh set calls run, and a bad zone or IP is refused with a reason. |
 | 3p.69 | `L` in the host screen shows the cluster and node firewall: on or off (OFF in red), the default policies and the rules in order, disabled rules marked off. |
+| 3p.70 | In the Storage screen, `n` walks through name, server, export and content and asks y/n before `pvesh create /storage --type nfs`; a bad name, path or content is refused with a reason. `X` asks y/n before `pvesh delete /storage/<name>`, with a red warning when the storage holds guest disks. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 
