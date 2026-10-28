@@ -14,6 +14,10 @@ pub struct Config {
     pub storage_full: f64,
     /// The hottest thermal zone is hot from here (degrees Celsius).
     pub temp_hot: f32,
+    /// The host CPU use is high from here (percent); the header reads red.
+    pub cpu_hot: f64,
+    /// The host memory use is high from here (percent); the header reads red.
+    pub mem_full: f64,
     /// Ring the terminal bell when a new alert appears.
     pub bell: bool,
     /// The cleanup keeps this many of the newest backups of each guest.
@@ -24,7 +28,17 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { stale_days: 7, disk_full: 90.0, storage_full: 90.0, temp_hot: 85.0, bell: true, keep_backups: 3, snapshot_days: 30 }
+        Config {
+            stale_days: 7,
+            disk_full: 90.0,
+            storage_full: 90.0,
+            temp_hot: 85.0,
+            cpu_hot: 90.0,
+            mem_full: 90.0,
+            bell: true,
+            keep_backups: 3,
+            snapshot_days: 30,
+        }
     }
 }
 
@@ -45,6 +59,12 @@ impl Config {
         }
         if let Some(v) = num("temp_hot").filter(|v| *v > 0.0) {
             c.temp_hot = v as f32;
+        }
+        if let Some(v) = num("cpu_hot").filter(|v| *v > 0.0) {
+            c.cpu_hot = v;
+        }
+        if let Some(v) = num("mem_full").filter(|v| *v > 0.0) {
+            c.mem_full = v;
         }
         if let Some(v) = t.get("bell").and_then(|v| v.as_bool()) {
             c.bell = v;
@@ -72,6 +92,12 @@ impl Config {
         }
         if let Some(v) = num("YAGURA_TEMP_HOT").filter(|v| *v > 0.0) {
             self.temp_hot = v as f32;
+        }
+        if let Some(v) = num("YAGURA_CPU_HOT").filter(|v| *v > 0.0) {
+            self.cpu_hot = v;
+        }
+        if let Some(v) = num("YAGURA_MEM_FULL").filter(|v| *v > 0.0) {
+            self.mem_full = v;
         }
         if let Some(v) = num("YAGURA_KEEP_BACKUPS").filter(|v| *v >= 1.0) {
             self.keep_backups = v as usize;
@@ -120,6 +146,14 @@ mod tests {
         let c = Config::default().with_env(|k| (k == "YAGURA_BELL").then(|| "0".to_string()));
         assert!(!c.bell);
         assert_eq!(Config::from_toml("not toml ["), Config::default());
+        let c = Config::from_toml(
+            "cpu_hot = 75
+mem_full = 0
+",
+        );
+        assert_eq!((c.cpu_hot, c.mem_full), (75.0, 90.0));
+        let c = c.with_env(|k| (k == "YAGURA_MEM_FULL").then(|| "80".to_string()));
+        assert_eq!(c.mem_full, 80.0);
         let c = Config::from_toml("keep_backups = 5\nsnapshot_days = 0\n");
         assert_eq!((c.keep_backups, c.snapshot_days), (5, 30));
         let c = c.with_env(|k| (k == "YAGURA_SNAPSHOT_DAYS").then(|| "14".to_string()));

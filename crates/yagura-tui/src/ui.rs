@@ -804,10 +804,21 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
     let load = m.load.map_or(String::new(), |(a, b, c)| format!("  load {a:.2} {b:.2} {c:.2}"));
     let l1 = Line::from(vec![
         Span::styled(format!(" {} ", if m.host.is_empty() { "host" } else { &m.host }), Style::new().add_modifier(Modifier::BOLD)),
-        Span::raw(format!("cpu {}{load}", pct(m.cpu))),
+        Span::styled(
+            format!("cpu {}", pct(m.cpu)),
+            if f64::from(m.cpu) >= crate::config::get().cpu_hot { RED.add_modifier(Modifier::BOLD) } else { Style::new() },
+        ),
+        Span::raw(load),
     ]);
     let l2 = Line::from(vec![
-        Span::raw(format!(" mem {}/{}  ", bytes(m.mem.used), bytes(m.mem.total))),
+        Span::styled(
+            format!(" mem {}/{}  ", bytes(m.mem.used), bytes(m.mem.total)),
+            if m.mem.total > 0 && m.mem.used as f64 * 100.0 >= m.mem.total as f64 * crate::config::get().mem_full {
+                RED.add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            },
+        ),
         Span::styled(format!("swap {}/{}", bytes(m.mem.swap_used), bytes(m.mem.swap_total)), if swap_red { RED } else { Style::new() }),
     ]);
     let nodes = m.cluster.nodes.iter().map(|n| format!("{} {}", n.name, if n.online { "online" } else { "offline" })).collect::<Vec<_>>();

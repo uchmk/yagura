@@ -1,6 +1,6 @@
 [package]
 name = "yagura-core"
-version = "0.73.94"
+version = "0.73.95"
 edition = "2024"
 rust-version = "1.95"
 description = "yagura's collectors: what the machine is doing, without any UI"
