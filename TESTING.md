@@ -387,6 +387,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.91 | `S` in the host screen lists every other node with `ok`, or `CANNOT LOG IN: <reason>` and a hint when key login fails; on a single node it says nothing is run over ssh. |
 | 3p.92 | The header's third line shows `alloc cpu <guest vCPUs>/<node cores> mem <guest RAM>/<node RAM>` for the running guests of this node (no templates, no stopped guests); it turns red when the memory promised is more than the node has, and is absent when no guest runs. |
 | 3p.93 | `A` on a guest opens the tags and the note filled from its config; blanks separate tags and they are saved as a;b in lower case, a wrong tag shows a red reason, nothing changed shows `nothing changed`; Enter asks y/n and runs `qm set` / `pct set` with only what changed (an emptied field is deleted); the guest list shows the new tags; `/` with a tag name finds the guests that carry it. |
+| 3p.94 | `X` in Guests opens `backup coverage`: a first line counting the guests without a backup newer than 7 days, then every guest with `never`, `N days ago` or `today`, the never and stale ones first and marked `!`; a guest you know has a recent backup shows the right age; nothing is changed. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

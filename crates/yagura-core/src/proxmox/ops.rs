@@ -1125,6 +1125,58 @@ pub fn parse_other_nodes(json: &str, local: &str) -> Vec<String> {
     out
 }
 
+/// A guest whose newest backup is older than this many days is marked.
+pub const BACKUP_STALE_DAYS: u64 = 7;
+
+/// The backup page: every guest with the age of its newest backup in any storage, the ones with none or a stale one first.
+/// `guests` are (id, name); `now` is the clock in seconds.
+pub fn backup_coverage(guests: &[(u32, String)], backups: &[Backup], now: u64) -> Vec<String> {
+    let mut rows: Vec<(Option<u64>, u32, &str)> = guests
+        .iter()
+        .map(|(id, name)| (backups.iter().filter(|b| b.vmid == *id).map(|b| now.saturating_sub(b.ctime) / 86400).min(), *id, name.as_str()))
+        .collect();
+    // Never backed up first, then the oldest.
+    rows.sort_by_key(|(age, id, _)| (std::cmp::Reverse(age.unwrap_or(u64::MAX)), *id));
+    let stale = rows.iter().filter(|(a, _, _)| a.is_none_or(|a| a > BACKUP_STALE_DAYS)).count();
+    let mut out =
+        vec![format!("backups of {} guests: {} without a backup newer than {} days", rows.len(), stale, BACKUP_STALE_DAYS), String::new()];
+    for (age, id, name) in rows {
+        let (mark, what) = match age {
+            None => ("!", "never".to_string()),
+            Some(a) if a > BACKUP_STALE_DAYS => ("!", format!("{a} days ago")),
+            Some(0) => (" ", "today".to_string()),
+            Some(a) => (" ", format!("{a} days ago")),
+        };
+        out.push(format!(" {mark} {id:>5}  {name:<24} {what}"));
+    }
+    out
+}
+
+/// The backup page for `guests`, from the backup files on `storages` (node, name, type). A storage every node sees (NFS, PBS…) is
+/// listed once. Slow: call it from a thread of its own.
+pub fn backup_status(guests: &[(u32, String)], storages: &[(String, String, String)]) -> Vec<String> {
+    let local = |kind: &str| matches!(kind, "dir" | "zfspool" | "lvm" | "lvmthin" | "btrfs" | "zfs");
+    let mut seen: Vec<&str> = vec![];
+    let mut all = vec![];
+    for (node, name, kind) in storages {
+        if !local(kind) {
+            if seen.contains(&name.as_str()) {
+                continue;
+            }
+            seen.push(name);
+        }
+        all.extend(backups(node, name));
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let mut out = backup_coverage(guests, &all, now);
+    out.push(String::new());
+    out.push(format!(
+        "looked at {} storages; a guest with no backup file there shows as never (a PBS group removed or pruned too)",
+        storages.len()
+    ));
+    out
+}
+
 /// The lines of the ssh page: one per other node, `ok` or why the key login failed.
 pub fn ssh_report(results: &[(String, Result<(), String>)]) -> Vec<String> {
     if results.is_empty() {
@@ -2368,6 +2420,29 @@ mod tests {
         // A node name that is not a host name is never put on a command line.
         assert_eq!(remote_cmd("pve", "x; rm -rf /", qm(), false), qm());
         assert_eq!(remote_cmd("pve", "-oProxyCommand=x", Cmd::new("pct", &["enter", "1"]), false).prog, "pct");
+    }
+
+    #[test]
+    fn backup_coverage_lists_the_forgotten_guests_first() {
+        let b = |vmid: u32, ctime: u64| Backup {
+            volid: format!("nas:backup/vzdump-qemu-{vmid}.vma.zst"),
+            storage: "nas".into(),
+            node: "pve".into(),
+            vmid,
+            ctime,
+            size: 1,
+            protected: false,
+            notes: String::new(),
+        };
+        let now = 100 * 86400;
+        let guests = vec![(100, "web".to_string()), (101, "db".to_string()), (102, "old".to_string()), (103, "none".to_string())];
+        let list = vec![b(100, now - 100), b(100, now - 3 * 86400), b(101, now - 2 * 86400 - 5), b(102, now - 30 * 86400)];
+        let r = backup_coverage(&guests, &list, now);
+        assert_eq!(r[0], "backups of 4 guests: 2 without a backup newer than 7 days");
+        assert!(r[2].contains("103") && r[2].contains("never") && r[2].contains('!'), "{r:?}");
+        assert!(r[3].contains("102") && r[3].contains("30 days ago") && r[3].contains('!'), "{r:?}");
+        assert!(r[4].contains("101") && r[4].contains("2 days ago") && !r[4].contains('!'), "{r:?}");
+        assert!(r[5].contains("100") && r[5].contains("today"), "{r:?}");
     }
 
     #[test]

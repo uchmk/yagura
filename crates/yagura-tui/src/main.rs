@@ -585,6 +585,7 @@ fn run(
             KeyCode::Char('W') if matches!(app.view, View::Guests | View::Graph(_)) => open_hardware(app, jobs_tx),
             KeyCode::Char('I') if matches!(app.view, View::Guests | View::Graph(_)) => open_cloudinit(app, jobs_tx),
             KeyCode::Char('A') if matches!(app.view, View::Guests | View::Graph(_)) => open_notes(app, jobs_tx),
+            KeyCode::Char('X') if matches!(app.view, View::Guests | View::Graph(_)) => open_coverage(app, jobs_tx),
             KeyCode::Char('n') if app.view == View::Guests => open_node(app),
             KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
             KeyCode::Char('M') if matches!(app.view, View::Guests | View::Graph(_)) => open_migrate(app),
@@ -1258,6 +1259,29 @@ fn open_certs(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Text(TITLE, proxmox::ops::certificates(now)));
         })
         .expect("spawn the certificates thread");
+}
+
+/// `X` in the guest screens: the age of the newest backup of every guest (read only), the forgotten ones first.
+fn open_coverage(app: &mut App, tx: &Sender<Job>) {
+    const TITLE: &str = "backup coverage";
+    let guests: Vec<(u32, String)> = app.model.cluster.guests.iter().filter(|g| !g.template).map(|g| (g.id, g.name.clone())).collect();
+    let storages: Vec<(String, String, String)> = app
+        .model
+        .cluster
+        .storage
+        .iter()
+        .filter(|s| s.active && s.content.split(',').any(|c| c == "backup"))
+        .map(|s| (s.node.clone(), s.name.clone(), s.kind.clone()))
+        .collect();
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Text { title: TITLE.into(), lines: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-coverage".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Text(TITLE, proxmox::ops::backup_status(&guests, &storages)));
+        })
+        .expect("spawn the backup coverage thread");
 }
 
 /// `S` in the host screen: whether this node can log in to the other nodes over ssh with a key (read only).
