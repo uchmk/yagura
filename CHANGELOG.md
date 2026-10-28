@@ -6,6 +6,13 @@
 
 ## [未リリース]
 
+## [0.73.81] - 2026-10-28
+
+### 追加
+
+- yagura-tui: ホスト画面で `P` を押すと、この機械のサービス（`pvesh get /nodes/<node>/services`）を一覧し、Enter で選んだものを再起動できる（`pvesh create /nodes/<node>/services/<name>/restart`、確認してから）。`pveproxy`・`pvedaemon`・`pve-cluster`・`corosync`・`sshd`・`networking` には、画面やクラスターとのつなぎが一瞬切れうると赤字で添える。
+- yagura-tui: ホスト画面で `X` を押すと、この機械の時刻（タイムゾーン）・DNS（検索ドメインと dns1〜3）・hosts ファイルを一覧する。読み取りだけで、変更は Web の画面から。
+
 ## [0.73.80] - 2026-10-28
 
 ### 追加

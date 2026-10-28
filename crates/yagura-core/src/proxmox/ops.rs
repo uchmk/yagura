@@ -662,6 +662,100 @@ pub fn pools() -> Vec<String> {
     parse_pools(&zfs, &ceph)
 }
 
+/// One service of a node (`/nodes/<n>/services`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Service {
+    pub name: String,
+    pub desc: String,
+    pub state: String,
+}
+
+/// The services of `/nodes/<n>/services`, in the order Proxmox gives.
+pub fn parse_services(json: &str) -> Vec<Service> {
+    let v: Value = serde_json::from_str(json).unwrap_or(Value::Null);
+    let s = |x: &Value, k: &str| x[k].as_str().unwrap_or("").to_string();
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    let name = x["service"].as_str().or_else(|| x["name"].as_str())?.to_string();
+                    Some(Service { name, desc: s(x, "desc"), state: s(x, "state") })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// This node's name, from the kernel.
+fn this_node() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim().to_string()
+}
+
+/// This node and its services (read-only `pvesh`).
+pub fn services() -> (String, Vec<Service>) {
+    let node = this_node();
+    let list = if node.is_empty() {
+        vec![]
+    } else {
+        pvesh(&format!("/nodes/{node}/services"), &[]).map(|j| parse_services(&j)).unwrap_or_default()
+    };
+    (node, list)
+}
+
+/// `pvesh create /nodes/<n>/services/<name>/restart`; the names are letters, digits and `-_.@` only.
+pub fn service_restart_cmd(node: &str, name: &str) -> Cmd {
+    let safe = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.@".contains(c));
+    let (node, name) = if safe(node) && safe(name) { (node, name) } else { ("invalid", "invalid") };
+    Cmd::new("pvesh", &["create", &format!("/nodes/{node}/services/{name}/restart")])
+}
+
+/// The lines of the node page: the clock (`/nodes/<n>/time`), the resolver (`/dns`) and the hosts file (`/hosts`).
+pub fn parse_node_settings(time: &str, dns: &str, hosts: &str) -> Vec<String> {
+    let j = |s: &str| serde_json::from_str::<Value>(s).unwrap_or(Value::Null);
+    let (time, dns, hosts) = (j(time), j(dns), j(hosts));
+    let mut out = vec![];
+    if time.is_object() {
+        out.push("time".to_string());
+        out.push(format!("  zone  {}", time["timezone"].as_str().unwrap_or("?")));
+        if let Some(t) = time["localtime"].as_u64() {
+            out.push(format!("  local {} (seconds since 1970 as the node's zone counts them)", t));
+        }
+        if let Some(t) = time["time"].as_u64() {
+            out.push(format!("  utc   {t} (seconds since 1970)"));
+        }
+    }
+    if dns.is_object() {
+        if !out.is_empty() {
+            out.push(String::new());
+        }
+        out.push("dns".to_string());
+        out.push(format!("  search {}", dns["search"].as_str().unwrap_or("?")));
+        for k in ["dns1", "dns2", "dns3"] {
+            if let Some(s) = dns[k].as_str() {
+                out.push(format!("  {k}   {s}"));
+            }
+        }
+    }
+    if let Some(d) = hosts["data"].as_str() {
+        if !out.is_empty() {
+            out.push(String::new());
+        }
+        out.push("hosts".to_string());
+        out.extend(d.lines().map(|l| format!("  {l}")));
+    }
+    out
+}
+
+/// The clock, DNS and hosts file of this node (read-only `pvesh`).
+pub fn node_settings() -> Vec<String> {
+    let node = this_node();
+    if node.is_empty() {
+        return vec![];
+    }
+    let get = |p: &str| pvesh(&format!("/nodes/{node}/{p}"), &[]).unwrap_or_default();
+    parse_node_settings(&get("time"), &get("dns"), &get("hosts"))
+}
+
 /// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
 pub fn export_name(label: &str, secs: u64) -> String {
     let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -1065,6 +1159,29 @@ mod tests {
             assert!(backup_job_save_cmd(None, &bad).is_err(), "{bad:?}");
         }
         assert_eq!(backup_job_delete_cmd("backup-1").args, ["delete", "/cluster/backup/backup-1"]);
+    }
+
+    #[test]
+    fn services_and_node_settings_are_read() {
+        let l = parse_services(
+            r#"[{"service":"pveproxy","desc":"PVE API Proxy Server","state":"running"},{"name":"cron","state":"stopped"},{"x":1}]"#,
+        );
+        assert_eq!(l.len(), 2);
+        assert_eq!((l[0].name.as_str(), l[0].state.as_str(), l[0].desc.as_str()), ("pveproxy", "running", "PVE API Proxy Server"));
+        assert_eq!(l[1].name, "cron");
+        assert!(parse_services("x").is_empty());
+        assert_eq!(service_restart_cmd("pve1", "pveproxy").args, ["create", "/nodes/pve1/services/pveproxy/restart"]);
+        assert_eq!(service_restart_cmd("pve1", "a/../b").args, ["create", "/nodes/invalid/services/invalid/restart"]);
+        let s = parse_node_settings(
+            r#"{"timezone":"Asia/Tokyo","time":1000,"localtime":33400}"#,
+            r#"{"search":"lan","dns1":"192.168.0.1"}"#,
+            r#"{"data":"127.0.0.1 localhost\n10.0.0.2 pve1\n"}"#,
+        );
+        assert_eq!(s[0], "time");
+        assert!(s[1].contains("Asia/Tokyo") && s[2].contains("33400") && s[3].contains("1000"), "{s:?}");
+        assert_eq!(&s[5..8], ["dns", "  search lan", "  dns1   192.168.0.1"]);
+        assert_eq!(&s[9..], ["hosts", "  127.0.0.1 localhost", "  10.0.0.2 pve1"]);
+        assert!(parse_node_settings("x", "x", "x").is_empty());
     }
 
     #[test]

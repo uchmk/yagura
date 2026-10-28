@@ -106,6 +106,7 @@ pub struct Ask {
 
 enum Job {
     Ha(Vec<proxmox::ops::HaRes>),
+    Services(String, Vec<proxmox::ops::Service>),
     /// The lines for the open `Dialog::Text` with this title.
     Text(&'static str, Vec<String>),
     Jobs(Vec<proxmox::ops::BackupJob>),
@@ -145,7 +146,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services  X (host) time, DNS and hosts  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -252,6 +253,12 @@ fn run(
                         app.dialog.as_mut().filter(|d| matches!(d, dialog::Dialog::Dump(f) if f.t.id == id))
                     {
                         f.last = Some(size);
+                    }
+                }
+                Job::Services(n, l) => {
+                    if let Some(dialog::Dialog::Services { node, list, .. }) = app.dialog.as_mut() {
+                        *node = n;
+                        *list = Some(l);
                     }
                 }
                 Job::Ha(l) => {
@@ -572,6 +579,8 @@ fn run(
             KeyCode::Char('E') if app.view == View::Host => open_ha(app, jobs_tx),
             KeyCode::Char('R') if app.view == View::Host => open_replication(app, jobs_tx),
             KeyCode::Char('Z') if app.view == View::Host => open_pools(app, jobs_tx),
+            KeyCode::Char('P') if app.view == View::Host => open_services(app, jobs_tx),
+            KeyCode::Char('X') if app.view == View::Host => open_node_settings(app, jobs_tx),
             _ => {}
         }
     }
@@ -943,6 +952,34 @@ fn open_replication(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Text(TITLE, proxmox::ops::replication(now)));
         })
         .expect("spawn the replication thread");
+}
+
+/// `P` in the host screen: the services of this node; Enter restarts one (asks first).
+fn open_services(app: &mut App, tx: &Sender<Job>) {
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Services { node: String::new(), list: None, sel: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-services".into())
+        .spawn(move || {
+            let (node, list) = proxmox::ops::services();
+            let _ = tx.send(Job::Services(node, list));
+        })
+        .expect("spawn the services thread");
+}
+
+/// `X` in the host screen: this node's clock, DNS and hosts file (read only).
+fn open_node_settings(app: &mut App, tx: &Sender<Job>) {
+    const TITLE: &str = "node time, DNS and hosts";
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Text { title: TITLE.into(), lines: None, top: 0 });
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-node".into())
+        .spawn(move || {
+            let _ = tx.send(Job::Text(TITLE, proxmox::ops::node_settings()));
+        })
+        .expect("spawn the node settings thread");
 }
 
 /// `Z` in the host screen: the health of the ZFS pools and the Ceph cluster (read only).

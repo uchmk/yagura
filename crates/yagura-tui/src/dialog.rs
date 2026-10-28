@@ -129,6 +129,12 @@ pub enum Dialog {
         list: Option<Vec<ops::HaRes>>,
         sel: usize,
     },
+    /// The services of this node (`None` while they are read), the cursor and the node's name.
+    Services {
+        node: String,
+        list: Option<Vec<ops::Service>>,
+        sel: usize,
+    },
     /// A read-only page of text for the cluster as a whole (`None` while it is read) and the first line shown.
     Text {
         title: String,
@@ -476,6 +482,19 @@ pub fn sure_ha(r: &ops::HaRes) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label: format!("ha {}", r.sid), cmds: vec![ops::ha_cmd(&r.sid, on)] }, lines }
 }
 
+/// The last question for restarting one service of a node.
+pub fn sure_service(node: &str, s: &ops::Service) -> Sure {
+    let mut lines = vec![(format!("restart {} on {node} (now {})", s.name, s.state), false)];
+    if matches!(s.name.as_str(), "pveproxy" | "pvedaemon" | "pve-cluster" | "corosync" | "sshd" | "networking") {
+        lines.push(("the web interface or the connection to the cluster can drop for a moment".into(), true));
+    }
+    Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("restart {}", s.name), cmds: vec![ops::service_restart_cmd(node, &s.name)] },
+        lines,
+    }
+}
+
 /// The last question for switching a backup job on or off (the opposite of what it is now).
 pub fn sure_job(j: &ops::BackupJob) -> Sure {
     let on = !j.enabled;
@@ -755,6 +774,21 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => {}
             }
             (Some(Dialog::Ha { list, sel }), Next::Nothing)
+        }
+        Dialog::Services { node, list, mut sel } => {
+            let n = list.as_ref().map_or(0, Vec::len);
+            match code {
+                KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => sel = (sel + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('k') | KeyCode::Up => sel = sel.saturating_sub(1),
+                KeyCode::Enter | KeyCode::Char('r') => {
+                    if let Some(s) = list.as_ref().and_then(|l| l.get(sel)) {
+                        return (Some(Dialog::Sure(sure_service(&node, s))), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Services { node, list, sel }), Next::Nothing)
         }
         Dialog::Text { title, lines, top } => {
             let n = lines.as_ref().map_or(0, Vec::len);
@@ -1220,6 +1254,21 @@ mod tests {
         // Esc leaves the guest and the note alone.
         let (d, _) = key(Dialog::SnapNote { t, snap: "s1".into(), text: "x".into() }, KeyCode::Esc, none);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_services_dialog_restarts_the_service_under_the_cursor() {
+        let none = |_: &Target| None;
+        let sv = |n: &str| ops::Service { name: n.into(), desc: String::new(), state: "running".into() };
+        let d = Dialog::Services { node: "pve1".into(), list: Some(vec![sv("cron"), sv("pveproxy")]), sel: 0 };
+        let (d, _) = key(d, KeyCode::Char('j'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(s.op, Op::Cmds { label: "restart pveproxy".into(), cmds: vec![ops::service_restart_cmd("pve1", "pveproxy")] });
+        assert!(s.lines.iter().any(|l| l.1));
+        assert!(!sure_service("pve1", &sv("cron")).lines.iter().any(|l| l.1));
+        let (d, _) = key(Dialog::Services { node: "n".into(), list: None, sel: 0 }, KeyCode::Enter, none);
+        assert!(matches!(d, Some(Dialog::Services { .. })));
     }
 
     #[test]

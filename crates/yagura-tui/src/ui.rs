@@ -144,6 +144,28 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("j/k move  Enter on/off (asks first)  Esc close", DIM));
             (" HA resources ".to_string(), l)
         }
+        Dialog::Services { node, list, sel } => {
+            let mut l = vec![];
+            match list {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(h) if h.is_empty() => l.push(Line::styled("no services could be read", DIM)),
+                Some(h) => {
+                    for (i, x) in h.iter().enumerate() {
+                        let st = if i == *sel {
+                            SELECTED
+                        } else if x.state != "running" {
+                            DIM
+                        } else {
+                            Style::new()
+                        };
+                        l.push(Line::styled(format!(" {:<22} {:<9} {}", x.name, x.state, x.desc), st));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("j/k move  Enter restart (asks first)  Esc close", DIM));
+            (format!(" services on {node} "), l)
+        }
         Dialog::Text { title, lines, top } => {
             let mut l = vec![];
             match lines {
@@ -644,7 +666,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1831,6 +1853,17 @@ mod tests {
         a.dialog = Some(Dialog::Text { title: "ZFS and Ceph".into(), lines: Some(lines), top: 0 });
         let s = text(&render(&a));
         assert!(s.contains("ZFS and Ceph") && s.contains("DEGRADED") && s.contains("read only"), "{s}");
+    }
+
+    #[test]
+    fn the_services_dialog_draws() {
+        let mut a = app(View::Host);
+        let sv =
+            |n: &str, s: &str| yagura_core::proxmox::ops::Service { name: n.into(), desc: "PVE API Proxy Server".into(), state: s.into() };
+        a.dialog =
+            Some(Dialog::Services { node: "pve1".into(), list: Some(vec![sv("pveproxy", "running"), sv("cron", "stopped")]), sel: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("services on pve1") && s.contains("pveproxy") && s.contains("stopped") && s.contains("Enter restart"), "{s}");
     }
 
     #[test]
