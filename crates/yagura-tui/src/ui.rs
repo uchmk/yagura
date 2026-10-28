@@ -354,6 +354,32 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled(format!("j/k choose  Enter next{tab}  Esc cancel"), DIM));
             (format!(" migrate {} {} from {} ", t.id, t.name, t.node), l)
         }
+        Dialog::Boot { t, step, vals, loaded, err } => {
+            let mut l = vec![];
+            if !*loaded {
+                l.push(Line::styled("reading...", DIM));
+            }
+            for (i, n) in ["start at boot", "order", "up delay (s)", "down delay (s)"].iter().enumerate() {
+                let cur = *loaded && i == *step;
+                let st = if cur { Style::new().add_modifier(Modifier::BOLD) } else { DIM };
+                l.push(Line::styled(format!("  {n:<15} {}{}", vals[i], if cur { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled(
+                [
+                    "yes or no: start the guest when the node starts",
+                    "the place in line, 1 starts first; empty for none",
+                    "seconds to wait after starting it",
+                    "seconds to wait before stopping it",
+                ][*step],
+                DIM,
+            ));
+            if !err.is_empty() {
+                l.push(Line::styled(err.clone(), RED));
+            }
+            l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
+            (format!(" boot options of {} {} ", t.id, t.name), l)
+        }
         Dialog::Resize { t, disks, sel, gib } => {
             let mut l = vec![];
             match disks {
@@ -749,7 +775,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x  f    clean up old snapshots and backups / stop a task (Tasks) (asks first) / step the Tasks filter (failed, running, 24 h, 7 d)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F M O Q  clone / delete / template / network / firewall / migrate / add to HA / remove from HA;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART, N network;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F M O Q B  clone / delete / template / network / firewall / migrate / add to HA / remove from HA / boot options;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART, N network;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1990,6 +2016,18 @@ mod tests {
         a.dialog = Some(Dialog::Text { title: "cluster and node firewall".into(), lines: Some(lines), top: 0 });
         let s = text(&render(&a));
         assert!(s.contains("cluster and node firewall") && s.contains("firewall OFF") && s.contains("no rules"), "{s}");
+    }
+
+    #[test]
+    fn the_boot_form_draws() {
+        let mut a = app(View::Guests);
+        let t = crate::dialog::Target::of(&a.model.cluster.guests[0]);
+        let vals = ["yes", "3", "30", ""].map(String::from);
+        a.dialog = Some(Dialog::Boot { t: t.clone(), step: 1, vals: vals.clone(), loaded: false, err: String::new() });
+        assert!(text(&render(&a)).contains("reading..."));
+        a.dialog = Some(Dialog::Boot { t, step: 1, vals, loaded: true, err: "start at boot is yes or no".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("boot options") && s.contains("start at boot") && s.contains("3_") && s.contains("yes or no"), "{s}");
     }
 
     #[test]

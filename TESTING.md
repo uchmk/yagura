@@ -370,6 +370,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.74 | The header cpu turns red from `cpu_hot` (90%) and the memory from `mem_full` (90%); `tui.toml` or `YAGURA_CPU_HOT` / `YAGURA_MEM_FULL` change the limits. |
 | 3p.75 | With `webhook = "https://…"` in `tui.toml` (or `YAGURA_WEBHOOK`), a new alert is POSTed as `{"text":…,"content":…}`; with no address nothing is sent, and a dead endpoint does not stop the screen. |
 | 3p.76 | `n` in the Storage screen: Tab switches between nfs, dir, lvmthin and zfspool; unused fields are skipped; y/n is asked last. |
+| 3p.77 | `B` on a guest opens its boot options (start at boot, order, up/down delay), filled from the config; empty numbers delete `startup`; y/n is asked last. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

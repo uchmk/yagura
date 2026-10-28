@@ -215,6 +215,14 @@ pub enum Dialog {
         running: bool,
         online: bool,
     },
+    /// The boot options of a guest: start at boot, order, up and down delay; `loaded` once its configuration was read.
+    Boot {
+        t: Target,
+        step: usize,
+        vals: [String; 4],
+        loaded: bool,
+        err: String,
+    },
     /// Grow a disk of a guest: its disks (`None` while the config is read), the cursor and the GiB typed.
     Resize {
         t: Target,
@@ -464,6 +472,25 @@ pub fn sure_edit(f: &EditForm) -> Option<Sure> {
 }
 
 /// The last question for growing the disk under the cursor by `gib` GiB; `None` for no disk or a number outside 1..=65536.
+pub fn sure_boot(t: &Target, vals: &[String; 4], cmd: ops::Cmd) -> Sure {
+    let num = |s: &String, unit: &str| if s.trim().is_empty() { "-".to_string() } else { format!("{}{unit}", s.trim()) };
+    let lines = vec![
+        (format!("boot options of {} {}", t.id, t.name), false),
+        (
+            format!(
+                "  start at boot {}, order {}, wait {} after start, {} before stop",
+                vals[0].trim(),
+                num(&vals[1], ""),
+                num(&vals[2], " s"),
+                num(&vals[3], " s")
+            ),
+            false,
+        ),
+        ("it takes effect the next time the node starts guests".into(), false),
+    ];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("boot options of {}", t.id), cmds: vec![cmd] }, lines }
+}
+
 pub fn sure_resize(t: &Target, disks: &[(String, String)], sel: usize, gib: &str) -> Option<Sure> {
     let (key, value) = disks.get(sel)?;
     let gib: u32 = gib.parse().ok().filter(|g| (1..=65536).contains(g))?;
@@ -1177,6 +1204,27 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
             }
             (Some(Dialog::Migrate { t, nodes, sel, running, online }), Next::Nothing)
         }
+        Dialog::Boot { t, mut step, mut vals, loaded, mut err } => {
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                _ if !loaded => {}
+                KeyCode::Char(c) if !c.is_control() && vals[step].chars().count() < 6 => vals[step].push(c),
+                KeyCode::Backspace => {
+                    if vals[step].is_empty() && step > 0 {
+                        step -= 1;
+                    } else {
+                        vals[step].pop();
+                    }
+                }
+                KeyCode::Enter if step < 3 => step += 1,
+                KeyCode::Enter => match ops::boot_cmd(t.kind, t.id, &vals) {
+                    Ok(cmd) => return (Some(Dialog::Sure(sure_boot(&t, &vals, cmd))), Next::Nothing),
+                    Err(e) => err = e,
+                },
+                _ => {}
+            }
+            (Some(Dialog::Boot { t, step, vals, loaded, err }), Next::Nothing)
+        }
         Dialog::Resize { t, disks, sel, mut gib } => {
             let n = disks.as_ref().map_or(0, Vec::len);
             let stay = |t, disks, sel, gib| (Some(Dialog::Resize { t, disks, sel, gib }), Next::Nothing);
@@ -1546,6 +1594,32 @@ mod tests {
         // Esc leaves the form.
         let (d, _) = key(Dialog::JobEdit { id: None, step: 0, vals: Default::default(), err: String::new() }, KeyCode::Esc, none);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_boot_form_waits_for_the_config_then_asks() {
+        let none = |_: &Target| None;
+        let form = |loaded, step, vals: [&str; 4]| Dialog::Boot {
+            t: target(Kind::Qemu),
+            step,
+            vals: vals.map(String::from),
+            loaded,
+            err: String::new(),
+        };
+        let (d, _) = key(form(false, 0, ["", "", "", ""]), KeyCode::Char('x'), none);
+        let Some(Dialog::Boot { vals, .. }) = d else { panic!("closed") };
+        assert!(vals[0].is_empty(), "typed before the config was read");
+        let (d, _) = key(form(true, 1, ["yes", "", "", ""]), KeyCode::Char('3'), none);
+        let Some(Dialog::Boot { vals, .. }) = d else { panic!("closed") };
+        assert_eq!(vals[1], "3");
+        let (d, _) = key(form(true, 3, ["maybe", "", "", ""]), KeyCode::Enter, none);
+        let Some(Dialog::Boot { err, .. }) = d else { panic!("accepted a wrong value") };
+        assert!(err.contains("yes or no"), "{err}");
+        let (d, _) = key(form(true, 3, ["yes", "3", "", ""]), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds[0].args.contains(&"order=3".to_string())));
+        let (d, _) = key(form(true, 2, ["yes", "", "", ""]), KeyCode::Backspace, none);
+        let Some(Dialog::Boot { step: 1, .. }) = d else { panic!("did not go back") };
     }
 
     #[test]

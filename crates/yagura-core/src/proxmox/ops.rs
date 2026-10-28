@@ -1482,6 +1482,52 @@ pub fn set_cmd(kind: Kind, id: u32, o: SetOpts) -> Cmd {
     c
 }
 
+/// The boot options of a guest as `[start at boot, order, up delay, down delay]` from its configuration (`onboot` and `startup`).
+pub fn boot_fields(cfg: &[(String, String)]) -> [String; 4] {
+    let get = |k: &str| cfg.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str()).unwrap_or("");
+    let mut out = [if get("onboot") == "1" { "yes" } else { "no" }.to_string(), String::new(), String::new(), String::new()];
+    for part in get("startup").split(',') {
+        match part.split_once('=') {
+            Some(("order", v)) => out[1] = v.to_string(),
+            Some(("up", v)) => out[2] = v.to_string(),
+            Some(("down", v)) => out[3] = v.to_string(),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `qm set` / `pct set` for the boot options `[start at boot (yes or no), order, up delay, down delay]`; empty numbers are left out,
+/// and with none of them the `startup` option is removed.
+pub fn boot_cmd(kind: Kind, id: u32, fields: &[String; 4]) -> Result<Cmd, String> {
+    let [onboot, order, up, down] = fields.each_ref().map(|s| s.trim().to_ascii_lowercase());
+    let onboot = match onboot.as_str() {
+        "yes" | "y" | "1" => "1",
+        "no" | "n" | "0" => "0",
+        _ => return Err("start at boot is yes or no".into()),
+    };
+    let mut parts = vec![];
+    for (name, v, what) in [("order", &order, "the order"), ("up", &up, "the start delay"), ("down", &down, "the stop delay")] {
+        if v.is_empty() {
+            continue;
+        }
+        if v.len() > 5 || !v.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(format!(
+                "{what} is a number of {}",
+                if name == "order" { "the place in line (1 starts first)" } else { "seconds" }
+            ));
+        }
+        parts.push(format!("{name}={v}"));
+    }
+    let mut c = Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), "--onboot", onboot]);
+    if parts.is_empty() {
+        c.args.extend(["--delete".to_string(), "startup".to_string()]);
+    } else {
+        c.args.extend(["--startup".to_string(), parts.join(",")]);
+    }
+    Ok(c)
+}
+
 /// Maintenance mode of a node in an HA cluster.
 pub fn maintenance_cmd(node: &str, on: bool) -> Cmd {
     Cmd::new("ha-manager", &["crm-command", "node-maintenance", if on { "enable" } else { "disable" }, node])
@@ -1685,6 +1731,27 @@ mod tests {
             ("dir", ["", "/a", "", "backup"]),
         ] {
             assert!(storage_add_cmd(k, &f(bad)).is_err(), "{k} {bad:?}");
+        }
+    }
+
+    #[test]
+    fn boot_options_are_read_and_set() {
+        let cfg = |l: &[(&str, &str)]| l.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        assert_eq!(boot_fields(&cfg(&[("onboot", "1"), ("startup", "order=3,up=30,down=60")])), ["yes", "3", "30", "60"]);
+        assert_eq!(boot_fields(&cfg(&[("startup", "up=5")])), ["no", "", "5", ""]);
+        assert_eq!(boot_fields(&[]), ["no", "", "", ""]);
+        let f = |a: [&str; 4]| a.map(String::from);
+        assert_eq!(
+            boot_cmd(Kind::Qemu, 100, &f(["Yes", "3", "30", ""])).unwrap().args,
+            ["set", "100", "--onboot", "1", "--startup", "order=3,up=30"]
+        );
+        let c = boot_cmd(Kind::Lxc, 101, &f(["no", "", "", ""])).unwrap();
+        assert_eq!(
+            (c.prog.as_str(), c.args),
+            ("pct", vec!["set", "101", "--onboot", "0", "--delete", "startup"].into_iter().map(String::from).collect())
+        );
+        for bad in [["maybe", "", "", ""], ["yes", "x", "", ""], ["yes", "", "-1", ""], ["yes", "", "", "123456"]] {
+            assert!(boot_cmd(Kind::Qemu, 1, &f(bad)).is_err(), "{bad:?}");
         }
     }
 
