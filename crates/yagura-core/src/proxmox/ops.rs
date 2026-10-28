@@ -405,6 +405,52 @@ pub fn backup_job_cmd(id: &str, on: bool) -> Cmd {
     Cmd::new("pvesh", &["set", &format!("/cluster/backup/{id}"), "--enabled", if on { "1" } else { "0" }])
 }
 
+/// One HA-managed guest (`Datacenter > HA`): what is asked for and what the manager reports.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HaRes {
+    /// `vm:100` or `ct:101`.
+    pub sid: String,
+    /// The requested state: `started`, `stopped`, `disabled` or `ignored`.
+    pub state: String,
+    pub group: String,
+    /// Where the manager has it, and what it says (`started`, `fence`, `error`...).
+    pub node: String,
+    pub status: String,
+}
+
+/// The resources in `/cluster/ha/resources`, each joined to its row of `/cluster/ha/status/current` (type `service`).
+pub fn parse_ha(resources: &str, status: &str) -> Vec<HaRes> {
+    let list = |s: &str| serde_json::from_str::<Value>(s).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let status = list(status);
+    list(resources)
+        .iter()
+        .filter_map(|r| {
+            let sid = r["sid"].as_str()?.to_string();
+            let live = status.iter().find(|s| s["type"] == "service" && s["id"].as_str() == Some(&format!("service:{sid}")));
+            let s = |v: Option<&Value>, k: &str| v.and_then(|v| v[k].as_str()).unwrap_or("").to_string();
+            Some(HaRes {
+                state: r["state"].as_str().unwrap_or("started").to_string(),
+                group: s(Some(r), "group"),
+                node: s(live, "node"),
+                status: s(live, "state"),
+                sid,
+            })
+        })
+        .collect()
+}
+
+/// The HA resources of the cluster (read-only `pvesh`).
+pub fn ha() -> Vec<HaRes> {
+    let res = pvesh("/cluster/ha/resources", &[]).unwrap_or_default();
+    let status = pvesh("/cluster/ha/status/current", &[]).unwrap_or_default();
+    parse_ha(&res, &status)
+}
+
+/// `pvesh set /cluster/ha/resources/<sid> --state started|disabled`.
+pub fn ha_cmd(sid: &str, on: bool) -> Cmd {
+    Cmd::new("pvesh", &["set", &format!("/cluster/ha/resources/{sid}"), "--state", if on { "started" } else { "disabled" }])
+}
+
 /// How a user or token expiry reads: `0` is never.
 fn expiry(e: u64, now: u64) -> String {
     match e {
@@ -827,6 +873,23 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ha_resources_join_their_live_state() {
+        let res = r#"[{"sid":"vm:100","state":"started","group":"main"},{"sid":"ct:101","state":"disabled"},{"state":"x"}]"#;
+        let st =
+            r#"[{"id":"quorum","type":"quorum","status":"OK"},{"id":"service:vm:100","type":"service","node":"pve2","state":"started"}]"#;
+        let l = parse_ha(res, st);
+        assert_eq!(l.len(), 2);
+        assert_eq!(
+            (l[0].sid.as_str(), l[0].state.as_str(), l[0].group.as_str(), l[0].node.as_str(), l[0].status.as_str()),
+            ("vm:100", "started", "main", "pve2", "started")
+        );
+        assert_eq!((l[1].state.as_str(), l[1].node.as_str(), l[1].status.as_str()), ("disabled", "", ""));
+        assert!(parse_ha("x", "y").is_empty());
+        assert_eq!(ha_cmd("vm:100", false).args, ["set", "/cluster/ha/resources/vm:100", "--state", "disabled"]);
+        assert_eq!(ha_cmd("ct:101", true).args[3], "started");
+    }
 
     #[test]
     fn users_tokens_and_permissions_are_listed() {

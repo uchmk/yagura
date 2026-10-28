@@ -117,6 +117,33 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("Enter next  Esc cancel", DIM));
             (format!(" backup {} {} ", form.t.id, form.t.name), l)
         }
+        Dialog::Ha { list, sel } => {
+            let mut l = vec![];
+            match list {
+                None => l.push(Line::styled("reading...", DIM)),
+                Some(h) if h.is_empty() => l.push(Line::styled("no HA resources (Datacenter > HA), or HA is not set up", DIM)),
+                Some(h) => {
+                    for (i, x) in h.iter().enumerate() {
+                        let bad = matches!(x.status.as_str(), "error" | "fence" | "recovery");
+                        let st = if i == *sel {
+                            SELECTED
+                        } else if bad {
+                            RED
+                        } else if x.state == "disabled" {
+                            DIM
+                        } else {
+                            Style::new()
+                        };
+                        let live = if x.status.is_empty() { String::new() } else { format!("  {} on {}", x.status, x.node) };
+                        let group = if x.group.is_empty() { String::new() } else { format!("  group {}", x.group) };
+                        l.push(Line::styled(format!(" {:<10} wanted {:<9}{live}{group}", x.sid, x.state), st));
+                    }
+                }
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled("j/k move  Enter on/off (asks first)  Esc close", DIM));
+            (" HA resources ".to_string(), l)
+        }
         Dialog::Text { title, lines, top } => {
             let mut l = vec![];
             match lines {
@@ -591,7 +618,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1737,6 +1764,25 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_ha_dialog_draws() {
+        let mut a = app(View::Host);
+        a.dialog = Some(Dialog::Ha { list: None, sel: 0 });
+        assert!(text(&render(&a)).contains("reading..."));
+        a.dialog = Some(Dialog::Ha { list: Some(vec![]), sel: 0 });
+        assert!(text(&render(&a)).contains("no HA resources"));
+        let r = |sid: &str, state: &str, status: &str| yagura_core::proxmox::ops::HaRes {
+            sid: sid.into(),
+            state: state.into(),
+            group: "main".into(),
+            node: "pve2".into(),
+            status: status.into(),
+        };
+        a.dialog = Some(Dialog::Ha { list: Some(vec![r("vm:100", "started", "started"), r("ct:101", "disabled", "")]), sel: 0 });
+        let s = text(&render(&a));
+        assert!(s.contains("vm:100") && s.contains("started on pve2") && s.contains("wanted disabled") && s.contains("group main"), "{s}");
     }
 
     #[test]

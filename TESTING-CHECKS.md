@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-288 rows to press (288 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+289 rows to press (289 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -304,6 +304,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.54** `H` on Host, Guests or a guest's graph screen steps the graphs through 1h, 1d, 7d, 30d and 1y (the status line says which); each graph's lower left names the span (`-7d`), and the GPU graph stays at 5m.
 - [ ] **3p.55** `e` in the snapshots dialog opens the note of the snapshot under the cursor (prefilled); Enter asks y/n and then `pvesh set .../snapshot/<name>/config --description` stores it; an empty note clears it, Esc cancels, and the guest is not touched.
 - [ ] **3p.56** `A` on the Host screen opens a read-only page of the cluster's users (on/off, expiry, groups) with their API tokens, then the permissions (path, role, user/group/token); OFF and EXPIRED are red; j/k, Space, g/G scroll and Esc closes.
+- [ ] **3p.57** `E` on the Host screen lists the HA resources (wanted state, live state and node, group; error/fence/recovery in red); Enter asks y/n and then `pvesh set /cluster/ha/resources/<sid> --state` switches it between started and disabled (turning it off carries a red warning).
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

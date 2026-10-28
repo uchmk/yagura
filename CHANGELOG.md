@@ -6,6 +6,13 @@
 
 ## [未リリース]
 
+## [0.73.77] - 2026-10-28
+
+### 追加
+
+- yagura-tui: ホスト画面で `E` を押すと、HA（高可用性）のリソースを一覧する（`pvesh get /cluster/ha/resources` と `/cluster/ha/status/current`）。ゲストごとに、望む状態・今の状態とノード・グループ。`error` / `fence` / `recovery` は赤字。
+  - Enter で、そのゲストの HA をオン／オフする（`pvesh set /cluster/ha/resources/<sid> --state started|disabled`）。確認（y）の後に走り、オフにするときは「止まったまま・移されない」旨を赤字で出す。リソースの追加・削除は Web の画面から。
+
 ## [0.73.76] - 2026-10-28
 
 ### 追加

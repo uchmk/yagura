@@ -124,6 +124,11 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// The HA resources of the cluster (`None` while they are read) and the cursor.
+    Ha {
+        list: Option<Vec<ops::HaRes>>,
+        sel: usize,
+    },
     /// A read-only page of text for the cluster as a whole (`None` while it is read) and the first line shown.
     Text {
         title: String,
@@ -451,6 +456,18 @@ pub fn sure_maintenance(node: &str, on: bool) -> Sure {
     }
 }
 
+/// The last question for switching HA on or off for one guest (the opposite of what it is now).
+pub fn sure_ha(r: &ops::HaRes) -> Sure {
+    let on = r.state == "disabled";
+    let mut lines = vec![(format!("{} HA for {} (now {})", if on { "turn on" } else { "turn off" }, r.sid, r.state), false)];
+    if on {
+        lines.push(("the manager will start the guest and keep it running, moving it if its node fails".into(), false));
+    } else {
+        lines.push(("the manager stops the guest and no longer restarts or moves it; it stays off until started by hand".into(), true));
+    }
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("ha {}", r.sid), cmds: vec![ops::ha_cmd(&r.sid, on)] }, lines }
+}
+
 /// The last question for switching a backup job on or off (the opposite of what it is now).
 pub fn sure_job(j: &ops::BackupJob) -> Sure {
     let on = !j.enabled;
@@ -693,6 +710,21 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 }
                 _ => (Some(Dialog::Snaps { t, list, sel }), Next::Nothing),
             }
+        }
+        Dialog::Ha { list, mut sel } => {
+            let n = list.as_ref().map_or(0, Vec::len);
+            match code {
+                KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => sel = (sel + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('k') | KeyCode::Up => sel = sel.saturating_sub(1),
+                KeyCode::Enter | KeyCode::Char('e') => {
+                    if let Some(r) = list.as_ref().and_then(|l| l.get(sel)) {
+                        return (Some(Dialog::Sure(sure_ha(r))), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Ha { list, sel }), Next::Nothing)
         }
         Dialog::Text { title, lines, top } => {
             let n = lines.as_ref().map_or(0, Vec::len);
@@ -1049,6 +1081,29 @@ mod tests {
         assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_ha_dialog_switches_the_resource_under_the_cursor() {
+        let none = |_: &Target| None;
+        let r = |sid: &str, state: &str| ops::HaRes {
+            sid: sid.into(),
+            state: state.into(),
+            group: String::new(),
+            node: String::new(),
+            status: String::new(),
+        };
+        let list = vec![r("vm:100", "started"), r("ct:101", "disabled")];
+        let (d, _) = key(Dialog::Ha { list: Some(list.clone()), sel: 0 }, KeyCode::Down, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(s.op, Op::Cmds { label: "ha ct:101".into(), cmds: vec![ops::ha_cmd("ct:101", true)] });
+        assert!(!s.lines.iter().any(|l| l.1));
+        let s = sure_ha(&list[0]);
+        assert_eq!(s.op, Op::Cmds { label: "ha vm:100".into(), cmds: vec![ops::ha_cmd("vm:100", false)] });
+        assert!(s.lines.iter().any(|l| l.1));
+        let (d, _) = key(Dialog::Ha { list: None, sel: 0 }, KeyCode::Enter, none);
+        assert!(matches!(d, Some(Dialog::Ha { .. })));
     }
 
     #[test]
