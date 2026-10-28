@@ -332,6 +332,8 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.36 | `e` opens the memory (MiB) and cores form for the marked guests (or the one under the cursor); digits and Tab work, blank keeps the value, Enter asks y/n listing the guests; `y` sets them and `c` shows the new values. |
 | 3p.37 | `t` on a running VM leaves the TUI and runs `qm terminal` (Ctrl+O leaves it); on a running container it runs `pct enter` (`exit` leaves it); afterwards the TUI is back with no leftover characters. |
 | 3p.38 | `t` on a stopped guest does not leave the TUI and the status line says the console needs a running guest; a console command that fails waits for Enter before returning. |
+| 3p.39 | In a task log and in a guest's log (`l` in the graph screen) `/` opens a search line at the edge; typing and Backspace edit it, Enter jumps to the newest match, matching lines are yellow. |
+| 3p.40 | After a search `n` goes to the next older match, `N` to the next newer one, and nothing happens past the last; Esc clears the text first and a second Esc closes the task log. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

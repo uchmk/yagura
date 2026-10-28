@@ -325,11 +325,32 @@ fn task_log(f: &mut Frame, t: &crate::TaskLog) {
         Some(l) => {
             let end = l.len().saturating_sub(t.back);
             let from = end.saturating_sub(inner);
-            l[from..end].iter().map(|x| Line::raw(x.clone())).collect()
+            l[from..end].iter().map(|x| found(&t.find, x)).collect()
         }
     };
-    let title = format!(" {} - j/k scroll  g/G top/bottom  Esc close ", t.title);
-    f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title)), r);
+    let title = format!(" {} - j/k scroll  g/G top/bottom  / find  Esc close ", t.title);
+    let mut block = Block::bordered().title(title);
+    if let Some(b) = find_bar(&t.find) {
+        block = block.title_bottom(b);
+    }
+    f.render_widget(Paragraph::new(lines).block(block), r);
+}
+
+/// A log line, in yellow when it holds the searched text.
+fn found(find: &crate::find::Find, line: &str) -> Line<'static> {
+    let clean: String = line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if find.matches(&clean) { Line::styled(clean, YELLOW) } else { Line::raw(clean) }
+}
+
+/// The search line at the bottom edge of a log: the text being typed, or the one being stepped through.
+fn find_bar(find: &crate::find::Find) -> Option<String> {
+    if find.typing {
+        Some(format!(" /{}_  Enter find  Esc cancel ", find.query))
+    } else if !find.query.is_empty() {
+        Some(format!(" /{}  n older  N newer  Esc clear ", find.query))
+    } else {
+        None
+    }
 }
 
 /// What a power change of several guests did, one line each, over everything else.
@@ -363,7 +384,7 @@ fn help(f: &mut Frame) {
         "  Enter      open a guest: graphs and the processes inside it",
         "  Esc        back from a guest (in the list: clear the marks)",
         "  Space      mark a guest; u o d r then act on all marked",
-        "  l          in a guest: switch processes / its log (j k scroll)",
+        "  l          in a guest: switch processes / its log (j k scroll; / n N find in a log)",
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
@@ -687,7 +708,10 @@ fn guest_procs(f: &mut Frame, app: &App, id: u32, area: Rect) {
 
 /// The newest lines of the entered guest's journal; `j`/`k` scroll back from the newest.
 fn guest_log(f: &mut Frame, app: &App, id: u32, name: &str, area: Rect) {
-    let title = format!(" log of {id} {name}  (l processes, j/k scroll) ");
+    let title = match find_bar(&app.log_find) {
+        Some(b) => format!(" log of {id} {name} {b}"),
+        None => format!(" log of {id} {name}  (l processes, j/k scroll, / find) "),
+    };
     let block = Block::new().borders(Borders::TOP).title(title);
     let lines = match app.model.guest_logs.get(&id) {
         None => {
@@ -704,8 +728,7 @@ fn guest_log(f: &mut Frame, app: &App, id: u32, name: &str, area: Rect) {
     let h = area.height.saturating_sub(1) as usize;
     let end = lines.len().saturating_sub(app.log_back.min(lines.len()));
     let start = end.saturating_sub(h);
-    let shown: Vec<Line> =
-        lines[start..end].iter().map(|l| Line::raw(l.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>())).collect();
+    let shown: Vec<Line> = lines[start..end].iter().map(|l| found(&app.log_find, l)).collect();
     f.render_widget(Paragraph::new(shown).block(block), area);
 }
 
@@ -1062,6 +1085,7 @@ mod tests {
             dialog: None,
             cleaning: false,
             console: None,
+            log_find: Default::default(),
         }
     }
 
@@ -1397,6 +1421,7 @@ mod tests {
             lines: Some(vec!["INFO: done".into()]),
             loading: false,
             back: 0,
+            find: Default::default(),
         });
         assert!(text(&render(&a)).contains("INFO: done"));
     }
@@ -1480,6 +1505,31 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_logs_show_the_search_and_mark_the_matches() {
+        let mut a = app(View::Graph(101));
+        a.log = true;
+        a.model.guest_logs.insert(101, Some(vec!["started".into(), "Error: disk".into(), "stopped".into()]));
+        a.log_find = crate::find::Find { query: "error".into(), typing: true };
+        let s = text(&render(&a));
+        assert!(s.contains("/error_") && s.contains("Error: disk"), "{s}");
+        a.log_find.typing = false;
+        assert!(text(&render(&a)).contains("n older"));
+        a.log_find.clear();
+        assert!(text(&render(&a)).contains("/ find"));
+        a.view = View::Tasks;
+        a.task_log = Some(crate::TaskLog {
+            upid: "x".into(),
+            title: "vzdump on pve".into(),
+            lines: Some(vec!["INFO: done".into(), "ERROR: full".into()]),
+            loading: false,
+            back: 0,
+            find: crate::find::Find { query: "err".into(), typing: false },
+        });
+        let s = text(&render(&a));
+        assert!(s.contains("/err") && s.contains("ERROR: full") && s.contains("N newer"), "{s}");
     }
 
     #[test]

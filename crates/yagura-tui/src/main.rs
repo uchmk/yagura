@@ -5,6 +5,7 @@
 
 mod config;
 mod dialog;
+mod find;
 mod model;
 mod ui;
 
@@ -71,6 +72,8 @@ pub struct App {
     pub dialog: Option<dialog::Dialog>,
     /// The cleanup scan is running.
     pub cleaning: bool,
+    /// The `/` search in the entered guest's log.
+    pub log_find: find::Find,
     /// A console to open next: the screen is handed to it until it ends.
     pub console: Option<(String, proxmox::ops::Cmd)>,
 }
@@ -83,6 +86,7 @@ pub struct TaskLog {
     pub loading: bool,
     /// How many lines up from the newest the view is.
     pub back: usize,
+    pub find: find::Find,
 }
 
 /// What the user asked of a guest, shown until they answer.
@@ -132,7 +136,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  t console  x stop task  Enter (storage) backups  l logs  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  t console  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -166,6 +170,7 @@ fn main() -> std::io::Result<()> {
         task_log: None,
         dialog: None,
         cleaning: false,
+        log_find: find::Find::default(),
         console: None,
     };
     let mut term = ratatui::init();
@@ -365,6 +370,10 @@ fn run(
             _ if app.task_log.is_some() => {
                 let n = app.task_log.as_ref().and_then(|t| t.lines.as_ref()).map_or(0, Vec::len);
                 if let Some(t) = app.task_log.as_mut() {
+                    let empty = Vec::new();
+                    if find_key(&mut t.find, t.lines.as_ref().unwrap_or(&empty), &mut t.back, k.code) {
+                        continue;
+                    }
                     match k.code {
                         KeyCode::Char('j') | KeyCode::Down => t.back = t.back.saturating_sub(1),
                         KeyCode::Char('k') | KeyCode::Up => t.back = (t.back + 1).min(n),
@@ -395,6 +404,7 @@ fn run(
                 }
                 app.selected = 0;
             }
+            _ if app.log && matches!(app.view, View::Graph(_)) && guest_log_find(app, k.code) => {}
             _ if app.confirm.is_some() => answer(app, k.code, jobs_tx),
             KeyCode::Char('?') => app.help = true,
             KeyCode::Char('/') if app.view == View::Guests => app.filtering = true,
@@ -424,6 +434,7 @@ fn run(
             KeyCode::Char('l') if matches!(app.view, View::Graph(_)) => {
                 app.log = !app.log;
                 app.log_back = 0;
+                app.log_find.clear();
                 app.procs_at = None;
                 app.procs_busy = false;
             }
@@ -437,6 +448,7 @@ fn run(
             KeyCode::Char('G') | KeyCode::End if app.log && matches!(app.view, View::Graph(_)) => app.log_back = 0,
             KeyCode::Esc if matches!(app.view, View::Graph(_)) => {
                 app.log = false;
+                app.log_find.clear();
                 app.log_back = 0;
                 app.view = View::Guests;
                 app.selected = app.guest_sel;
@@ -549,6 +561,44 @@ fn open_config(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Config(t.id, proxmox::ops::config(&t.node, t.kind, t.id).unwrap_or_default()));
         })
         .expect("spawn the config thread");
+}
+
+/// The `/` search keys of a log: typing the text, `n` / `N` to step through the matches, Esc to drop the text.
+/// True when the key was the search's.
+fn find_key(find: &mut find::Find, lines: &[String], back: &mut usize, code: KeyCode) -> bool {
+    use find::{Step, Typed};
+    let step = if find.typing {
+        match find.key(code) {
+            Typed::Done => Step::First,
+            _ => return true,
+        }
+    } else {
+        match code {
+            KeyCode::Char('/') => {
+                find.start();
+                return true;
+            }
+            KeyCode::Char('n') if find.active() => Step::Older,
+            KeyCode::Char('N') if find.active() => Step::Newer,
+            KeyCode::Esc if find.active() => {
+                find.clear();
+                return true;
+            }
+            _ => return false,
+        }
+    };
+    if let Some(b) = find.jump(lines, *back, step) {
+        *back = b;
+    }
+    true
+}
+
+/// The search in the entered guest's journal.
+fn guest_log_find(app: &mut App, code: KeyCode) -> bool {
+    let View::Graph(id) = app.view else { return false };
+    let empty = Vec::new();
+    let lines = app.model.guest_logs.get(&id).and_then(|l| l.as_ref()).unwrap_or(&empty);
+    find_key(&mut app.log_find, lines, &mut app.log_back, code)
 }
 
 /// `t`: the console of the running guest under the cursor; the screen goes to it until it ends.
@@ -734,8 +784,14 @@ fn refresh_tasks(app: &mut App, tx: &Sender<Job>) {
 /// Open the log of the task under the cursor.
 fn open_task_log(app: &mut App, tx: &Sender<Job>) {
     let Some(t) = app.model.host_tasks.get(app.selected).cloned() else { return };
-    app.task_log =
-        Some(TaskLog { upid: t.upid.clone(), title: format!("{} {} on {}", t.kind, t.id, t.node), lines: None, loading: true, back: 0 });
+    app.task_log = Some(TaskLog {
+        upid: t.upid.clone(),
+        title: format!("{} {} on {}", t.kind, t.id, t.node),
+        lines: None,
+        loading: true,
+        back: 0,
+        find: find::Find::default(),
+    });
     let tx = tx.clone();
     std::thread::Builder::new()
         .name("yagura-tasklog".into())
