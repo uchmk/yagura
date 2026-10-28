@@ -158,6 +158,18 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("j/k scroll  Esc close  (read only; e in the guest list sets memory and cores)", DIM));
             (format!(" config of {} {} ", t.id, t.name), l)
         }
+        Dialog::Node { node, stopped, running } => {
+            let l = vec![
+                Line::raw(format!("node {node}: {} stopped, {} running guests (templates left out)", stopped.len(), running.len())),
+                Line::raw(""),
+                Line::raw("  m  maintenance mode on        M  maintenance mode off"),
+                Line::raw(format!("  s  start the {} stopped guests", stopped.len())),
+                Line::raw(format!("  d  shut down the {} running guests", running.len())),
+                Line::raw(""),
+                Line::styled("Esc close  (each one asks y/n first)", DIM),
+            ];
+            (" node ".to_string(), l)
+        }
         Dialog::Edit(form) => {
             let field = |i: usize, name: &str, v: &str| {
                 let cur = if form.field == i { "_" } else { "" };
@@ -388,7 +400,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e t      guest config / set mem+cores / console;  Storage: Enter backups",
+        "  c e t n    guest config / set mem+cores / console / node menu;  Storage: Enter backups",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -841,7 +853,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
         View::Storage => " Tab next  j/k move  Enter backups  ? help  q quit",
         View::Tasks => " Tab host  j/k move  Enter log  x stop  ? help  q quit",
         View::Guests => {
-            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  c config  e edit  t console  ? help  q quit"
+            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  c config  e edit  t console  n node  ? help  q quit"
         }
         View::Procs => " Tab storage  j/k move  ? help  q quit",
         View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  S snap  b backup  m snaps  c config  t console  ? help  q quit",
@@ -1505,6 +1517,23 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_node_menu_draws() {
+        let t = |id| crate::dialog::Target {
+            id,
+            name: format!("g{id}"),
+            kind: Kind::Qemu,
+            node: "pve".into(),
+            maxmem: 0,
+            used: 0,
+            template: false,
+        };
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Node { node: "pve".into(), stopped: vec![t(100)], running: vec![t(101), t(102)] });
+        let s = text(&render(&a));
+        assert!(s.contains("node pve") && s.contains("start the 1 stopped") && s.contains("shut down the 2 running"), "{s}");
     }
 
     #[test]

@@ -5,8 +5,9 @@
 use std::collections::BTreeSet;
 
 use ratatui::crossterm::event::KeyCode;
+use yagura_core::proxmox;
 use yagura_core::proxmox::ops::{self, Backup, Cmd, Compress, Dump, Item, Mode, Snap, SnapOp};
-use yagura_core::proxmox::{Guest, HostTask, Kind, Storage};
+use yagura_core::proxmox::{Guest, HostTask, Kind, Power, Storage};
 
 use crate::model::bytes;
 
@@ -125,6 +126,12 @@ pub enum Dialog {
     },
     /// Memory and cores to set on these guests.
     Edit(EditForm),
+    /// The node menu: maintenance mode, and starting or shutting down every guest of the node.
+    Node {
+        node: String,
+        stopped: Vec<Target>,
+        running: Vec<Target>,
+    },
     Backups {
         node: String,
         storage: String,
@@ -330,6 +337,47 @@ pub fn sure_edit(f: &EditForm) -> Option<Sure> {
     Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("set {what}"), cmds }, lines })
 }
 
+/// The last question for the maintenance mode of a node (HA clusters only; the tool says so otherwise).
+pub fn sure_maintenance(node: &str, on: bool) -> Sure {
+    let (verb, note) = if on {
+        ("turn maintenance mode on for", "HA guests are moved to other nodes; needs an HA cluster")
+    } else {
+        ("turn maintenance mode off for", "HA guests may move back to the node; needs an HA cluster")
+    };
+    let lines = vec![(format!("{verb} node {node}"), false), (note.to_string(), true)];
+    Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("maintenance {}", if on { "on" } else { "off" }), cmds: vec![ops::maintenance_cmd(node, on)] },
+        lines,
+    }
+}
+
+/// The last question for starting or shutting down every guest in `list`, one after the other; `None` for an empty list.
+pub fn sure_all(node: &str, list: &[Target], start: bool) -> Option<Sure> {
+    if list.is_empty() {
+        return None;
+    }
+    let (power, verb) = if start { (Power::Start, "start") } else { (Power::Shutdown, "shut down") };
+    let mut lines = vec![(format!("{verb} {} guests on {node}, one after the other", list.len()), false)];
+    for t in list.iter().take(LISTED) {
+        lines.push((format!("  {} {} ({})", t.id, t.name, if t.kind == Kind::Lxc { "container" } else { "VM" }), false));
+    }
+    if list.len() > LISTED {
+        lines.push((format!("  ... and {} more", list.len() - LISTED), false));
+    }
+    if !start {
+        lines.push(("a guest that does not stop stalls the rest; the first failure ends the run".into(), true));
+    }
+    let cmds = list
+        .iter()
+        .map(|t| {
+            let (prog, [v, id]) = proxmox::power_command(t.kind, t.id, power);
+            Cmd::new(prog, &[&v, &id])
+        })
+        .collect();
+    Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("{verb} all on {node}"), cmds }, lines })
+}
+
 /// How many items the cleanup question lists before it says "and N more".
 const LISTED: usize = 12;
 
@@ -448,6 +496,20 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => top,
             };
             (Some(Dialog::Config { t, list, top }), Next::Nothing)
+        }
+        Dialog::Node { node, stopped, running } => {
+            let sure = match code {
+                KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
+                KeyCode::Char('m') => Some(sure_maintenance(&node, true)),
+                KeyCode::Char('M') => Some(sure_maintenance(&node, false)),
+                KeyCode::Char('s') => sure_all(&node, &stopped, true),
+                KeyCode::Char('d') => sure_all(&node, &running, false),
+                _ => None,
+            };
+            match sure {
+                Some(s) => (Some(Dialog::Sure(s)), Next::Nothing),
+                None => (Some(Dialog::Node { node, stopped, running }), Next::Nothing),
+            }
         }
         Dialog::Edit(mut f) => match code {
             KeyCode::Esc => (None, Next::Nothing),
@@ -602,6 +664,24 @@ mod tests {
         let s = sure_restore(&b(100, 1_793_178_900, false), 120).unwrap();
         assert!(s.lines[1].0.contains("2026-10-28 09:15"));
         assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds[0].prog == "pct" && cmds[0].args[1] == "120"));
+    }
+
+    #[test]
+    fn the_node_menu_asks_before_maintenance_and_before_starting_or_stopping_all() {
+        let t = |id, kind| Target { id, name: format!("g{id}"), kind, node: "pve".into(), maxmem: 0, used: 0, template: false };
+        let menu = || Dialog::Node { node: "pve".into(), stopped: vec![t(100, Kind::Qemu), t(101, Kind::Lxc)], running: vec![] };
+        let (d, _) = key(menu(), KeyCode::Char('m'), |_| None);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(s.op, Op::Cmds { label: "maintenance on".into(), cmds: vec![ops::maintenance_cmd("pve", true)] });
+        let (d, _) = key(menu(), KeyCode::Char('s'), |_| None);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        let Op::Cmds { cmds, .. } = &s.op else { panic!("not commands") };
+        assert_eq!(cmds, &vec![Cmd::new("qm", &["start", "100"]), Cmd::new("pct", &["start", "101"])]);
+        // Nothing is running, so d asks nothing and the menu stays.
+        let (d, _) = key(menu(), KeyCode::Char('d'), |_| None);
+        assert!(matches!(d, Some(Dialog::Node { .. })));
+        let (d, _) = key(menu(), KeyCode::Esc, |_| None);
+        assert!(d.is_none());
     }
 
     #[test]

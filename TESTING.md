@@ -334,6 +334,8 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.38 | `t` on a stopped guest does not leave the TUI and the status line says the console needs a running guest; a console command that fails waits for Enter before returning. |
 | 3p.39 | In a task log and in a guest's log (`l` in the graph screen) `/` opens a search line at the edge; typing and Backspace edit it, Enter jumps to the newest match, matching lines are yellow. |
 | 3p.40 | After a search `n` goes to the next older match, `N` to the next newer one, and nothing happens past the last; Esc clears the text first and a second Esc closes the task log. |
+| 3p.41 | `n` in the guest list opens the node menu of the node under the cursor, showing how many guests are stopped and running; Esc closes it. |
+| 3p.42 | In the node menu `s` / `d` list the guests and ask y/n, then start / shut them down one after the other; `m` / `M` ask y/n and turn maintenance mode on / off (an error says so on a node without HA). |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

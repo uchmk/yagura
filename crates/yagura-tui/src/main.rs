@@ -136,7 +136,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  t console  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -420,6 +420,7 @@ fn run(
                 open_config(app, jobs_tx)
             }
             KeyCode::Char('e') if app.view == View::Guests => open_edit(app),
+            KeyCode::Char('n') if app.view == View::Guests => open_node(app),
             KeyCode::Char('t') if matches!(app.view, View::Guests | View::Graph(_)) => open_console(app),
             KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
             KeyCode::Char(' ') if app.view == View::Guests => {
@@ -650,6 +651,19 @@ console {title}
 }
 
 /// `e`: the memory and cores form for the marked guests, or the one under the cursor.
+/// `n` in the guest list: the node menu for the node of the guest under the cursor (else the first node).
+fn open_node(app: &mut App) {
+    let guests = app.model.guests(app.sort);
+    let node = guests.get(app.selected).map(|g| g.node.clone()).or_else(|| app.model.cluster.nodes.first().map(|n| n.name.clone()));
+    let Some(node) = node else { return };
+    let on_node = |st: proxmox::Status| -> Vec<dialog::Target> {
+        app.model.cluster.guests.iter().filter(|g| g.node == node && !g.template && g.status == st).map(dialog::Target::of).collect()
+    };
+    let (stopped, running) = (on_node(proxmox::Status::Stopped), on_node(proxmox::Status::Running));
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Node { node, stopped, running });
+}
+
 fn open_edit(app: &mut App) {
     let guests = app.model.guests(app.sort);
     let targets: Vec<dialog::Target> = if app.marks.is_empty() {
