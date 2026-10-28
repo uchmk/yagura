@@ -291,17 +291,25 @@ pub struct EditForm {
     pub targets: Vec<Target>,
     pub mem: String,
     pub cores: String,
-    /// 0 = memory, 1 = cores.
+    /// Containers only.
+    pub swap: String,
+    pub cpulimit: String,
+    /// 0 = memory, 1 = cores, 2 = swap, 3 = CPU limit.
     pub field: usize,
 }
 
 impl EditForm {
     pub fn new(targets: Vec<Target>) -> EditForm {
-        EditForm { targets, mem: String::new(), cores: String::new(), field: 0 }
+        EditForm { targets, mem: String::new(), cores: String::new(), swap: String::new(), cpulimit: String::new(), field: 0 }
     }
 
     fn field_mut(&mut self) -> &mut String {
-        if self.field == 0 { &mut self.mem } else { &mut self.cores }
+        match self.field {
+            0 => &mut self.mem,
+            1 => &mut self.cores,
+            2 => &mut self.swap,
+            _ => &mut self.cpulimit,
+        }
     }
 }
 
@@ -311,7 +319,9 @@ pub fn sure_edit(f: &EditForm) -> Option<Sure> {
         if s.is_empty() { Some(None) } else { s.parse::<u32>().ok().filter(|v| (lo..=hi).contains(v)).map(Some) }
     };
     let (mem, cores) = (num(&f.mem, 16, 4_194_304)?, num(&f.cores, 1, 512)?);
-    if mem.is_none() && cores.is_none() {
+    let (swap, cpulimit) = (num(&f.swap, 0, 4_194_304)?, num(&f.cpulimit, 0, 512)?);
+    let o = ops::SetOpts { mem_mib: mem, cores, swap_mib: swap, cpulimit };
+    if o == ops::SetOpts::default() {
         return None;
     }
     let mut what = vec![];
@@ -320,6 +330,12 @@ pub fn sure_edit(f: &EditForm) -> Option<Sure> {
     }
     if let Some(c) = cores {
         what.push(format!("{c} cores"));
+    }
+    if let Some(s) = swap {
+        what.push(format!("swap {s} MiB (containers only)"));
+    }
+    if let Some(l) = cpulimit {
+        what.push(if l == 0 { "no CPU limit".to_string() } else { format!("CPU limit {l}") });
     }
     let what = what.join(", ");
     let mut lines = vec![(format!("set {what} on {} guests", f.targets.len()), false)];
@@ -333,7 +349,7 @@ pub fn sure_edit(f: &EditForm) -> Option<Sure> {
         lines.push((format!("  ... and {} more", f.targets.len() - LISTED), false));
     }
     lines.push(("a running guest takes most of this only after a restart".into(), true));
-    let cmds = f.targets.iter().map(|t| ops::set_cmd(t.kind, t.id, mem, cores)).collect();
+    let cmds = f.targets.iter().map(|t| ops::set_cmd(t.kind, t.id, o)).collect();
     Some(Sure { t: Target::none(), op: Op::Cmds { label: format!("set {what}"), cmds }, lines })
 }
 
@@ -514,7 +530,7 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
         Dialog::Edit(mut f) => match code {
             KeyCode::Esc => (None, Next::Nothing),
             KeyCode::Tab | KeyCode::Down | KeyCode::Up => {
-                f.field = 1 - f.field;
+                f.field = if code == KeyCode::Up { (f.field + 3) % 4 } else { (f.field + 1) % 4 };
                 (Some(Dialog::Edit(f)), Next::Nothing)
             }
             KeyCode::Char(c) if c.is_ascii_digit() && f.field_mut().len() < 7 => {
@@ -706,6 +722,14 @@ mod tests {
         assert_eq!(cmds[0].prog, "qm");
         assert_eq!(cmds[1].prog, "pct");
         assert!(cmds[0].args.contains(&"2048".to_string()) && cmds[0].args.contains(&"4".to_string()));
+        // Swap and the CPU limit are set too; the VM ignores the swap.
+        let mut f = EditForm::new(vec![target(Kind::Qemu), target(Kind::Lxc)]);
+        f.swap = "0".into();
+        f.cpulimit = "2".into();
+        let s = sure_edit(&f).expect("a question");
+        let Op::Cmds { cmds, .. } = &s.op else { panic!("not commands") };
+        assert_eq!(cmds[0].args, ["set", "101", "--cpulimit", "2"]);
+        assert_eq!(cmds[1].args, ["set", "101", "--swap", "0", "--cpulimit", "2"]);
         // Out of range stays on the form.
         let mut f = EditForm::new(vec![target(Kind::Qemu)]);
         f.cores = "0".into();

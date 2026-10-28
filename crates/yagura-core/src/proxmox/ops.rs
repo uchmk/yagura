@@ -346,15 +346,32 @@ pub fn console_cmd(kind: Kind, id: u32) -> Cmd {
     if kind == Kind::Lxc { Cmd::new("pct", &["enter", &id.to_string()]) } else { Cmd::new("qm", &["terminal", &id.to_string()]) }
 }
 
-/// `qm set` / `pct set` for the memory (MiB) and the number of cores.
-pub fn set_cmd(kind: Kind, id: u32, mem_mib: Option<u32>, cores: Option<u32>) -> Cmd {
-    let mut c = Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string()]);
-    if let Some(m) = mem_mib {
-        c.args.extend(["--memory".to_string(), m.to_string()]);
+/// What `qm set` / `pct set` should change; `None` keeps the guest's value.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SetOpts {
+    pub mem_mib: Option<u32>,
+    pub cores: Option<u32>,
+    /// Containers only (a VM has no swap setting; it is ignored there).
+    pub swap_mib: Option<u32>,
+    /// Number of host cores the guest may use at most; 0 = unlimited.
+    pub cpulimit: Option<u32>,
+}
+
+/// `qm set` / `pct set` for the memory, cores, swap and CPU limit.
+pub fn set_cmd(kind: Kind, id: u32, o: SetOpts) -> Cmd {
+    let lxc = kind == Kind::Lxc;
+    let mut c = Cmd::new(if lxc { "pct" } else { "qm" }, &["set", &id.to_string()]);
+    let mut add = |flag: &str, v: Option<u32>| {
+        if let Some(v) = v {
+            c.args.extend([flag.to_string(), v.to_string()]);
+        }
+    };
+    add("--memory", o.mem_mib);
+    add("--cores", o.cores);
+    if lxc {
+        add("--swap", o.swap_mib);
     }
-    if let Some(n) = cores {
-        c.args.extend(["--cores".to_string(), n.to_string()]);
-    }
+    add("--cpulimit", o.cpulimit);
     c
 }
 
@@ -489,8 +506,14 @@ mod tests {
         let c = parse_config(r#"{"memory":2048,"digest":"x","name":"web","net0":"virtio,bridge=vmbr0"}"#);
         assert_eq!(c.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["memory", "name", "net0"]);
         assert_eq!(c[0].1, "2048");
-        assert_eq!(set_cmd(Kind::Lxc, 101, Some(1024), Some(2)).args, ["set", "101", "--memory", "1024", "--cores", "2"]);
-        assert_eq!(set_cmd(Kind::Qemu, 7, None, Some(4)), Cmd::new("qm", &["set", "7", "--cores", "4"]));
+        assert_eq!(
+            set_cmd(Kind::Lxc, 101, SetOpts { mem_mib: Some(1024), cores: Some(2), ..Default::default() }).args,
+            ["set", "101", "--memory", "1024", "--cores", "2"]
+        );
+        let all = SetOpts { swap_mib: Some(0), cpulimit: Some(1), ..Default::default() };
+        assert_eq!(set_cmd(Kind::Lxc, 5, all).args, ["set", "5", "--swap", "0", "--cpulimit", "1"]);
+        assert_eq!(set_cmd(Kind::Qemu, 5, all).args, ["set", "5", "--cpulimit", "1"]);
+        assert_eq!(set_cmd(Kind::Qemu, 7, SetOpts { cores: Some(4), ..Default::default() }), Cmd::new("qm", &["set", "7", "--cores", "4"]));
         assert_eq!(console_cmd(Kind::Qemu, 7), Cmd::new("qm", &["terminal", "7"]));
         assert_eq!(console_cmd(Kind::Lxc, 101), Cmd::new("pct", &["enter", "101"]));
         assert_eq!(maintenance_cmd("pve", true).args, ["crm-command", "node-maintenance", "enable", "pve"]);

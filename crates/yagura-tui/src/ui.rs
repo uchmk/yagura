@@ -184,8 +184,13 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 Line::raw(""),
                 field(0, "memory MiB", &form.mem),
                 field(1, "cores", &form.cores),
+                field(2, "swap MiB", &form.swap),
+                field(3, "cpu limit", &form.cpulimit),
                 Line::raw(""),
-                Line::styled("digits  Tab other field  Enter next  Esc cancel  (blank keeps the value)", DIM),
+                Line::styled(
+                    "digits  Tab next field  Enter ask  Esc cancel  (blank keeps; swap: containers only; cpu limit 0 = none)",
+                    DIM,
+                ),
             ];
             (" set memory and cores ".to_string(), l)
         }
