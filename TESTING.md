@@ -348,6 +348,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.52 | `w` in a task log (Tasks, Enter) or a guest's journal (`l` in the graph screen) writes every line to a new `~/yagura-<label>-<secs>.log` and says where (in the log's title, or the status line); a second `w` in the same second does not overwrite. |
 | 3p.53 | `J` on the Storage screen lists the cluster's backup jobs (on/off, id, schedule, scope -> storage, mode, next run); Enter asks y/n (turning a job off carries a red warning) and then `pvesh set /cluster/backup/<id> --enabled` switches it. |
 | 3p.54 | `H` on Host, Guests or a guest's graph screen steps the graphs through 1h, 1d, 7d, 30d and 1y (the status line says which); each graph's lower left names the span (`-7d`), and the GPU graph stays at 5m. |
+| 3p.55 | `e` in the snapshots dialog opens the note of the snapshot under the cursor (prefilled); Enter asks y/n and then `pvesh set .../snapshot/<name>/config --description` stores it; an empty note clears it, Esc cancels, and the guest is not touched. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

@@ -117,6 +117,15 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("Enter next  Esc cancel", DIM));
             (format!(" backup {} {} ", form.t.id, form.t.name), l)
         }
+        Dialog::SnapNote { t, snap, text } => (
+            format!(" note of {snap} ({} {}) ", t.id, t.name),
+            vec![
+                Line::raw("what this snapshot is for (may be empty):"),
+                Line::styled(format!("  {text}_"), Style::new().add_modifier(Modifier::BOLD)),
+                Line::raw(""),
+                Line::styled("Enter next  Esc cancel", DIM),
+            ],
+        ),
         Dialog::Snaps { t, list, sel } => {
             let mut l = vec![];
             match list {
@@ -132,7 +141,7 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 }
             }
             l.push(Line::raw(""));
-            l.push(Line::styled("j/k move  d delete  r roll back (asks first)  Esc close", DIM));
+            l.push(Line::styled("j/k move  d delete  r roll back (asks first)  e edit note  Esc close", DIM));
             (format!(" snapshots of {} {} ", t.id, t.name), l)
         }
         Dialog::Config { t, list, top } => {
@@ -1707,6 +1716,15 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_snapshot_note_dialog_draws() {
+        let t = crate::dialog::Target::none();
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::SnapNote { t, snap: "before-upgrade".into(), text: "kernel 6.8".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("note of before-upgrade") && s.contains("kernel 6.8_"), "{s}");
     }
 
     #[test]

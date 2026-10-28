@@ -88,6 +88,12 @@ pub fn snap_command(kind: Kind, id: u32, op: &SnapOp) -> (&'static str, Vec<Stri
     (prog, args)
 }
 
+/// `pvesh set .../snapshot/<name>/config --description <text>`: change the note of a snapshot.
+pub fn snap_note_cmd(node: &str, kind: Kind, id: u32, name: &str, text: &str) -> Cmd {
+    let k = if kind == Kind::Lxc { "lxc" } else { "qemu" };
+    Cmd::new("pvesh", &["set", &format!("/nodes/{node}/{k}/{id}/snapshot/{name}/config"), "--description", text])
+}
+
 /// Run a snapshot operation and wait for it.
 pub fn snapshot(kind: Kind, id: u32, op: &SnapOp) -> Result<(), String> {
     let (prog, args) = snap_command(kind, id, op);
@@ -773,6 +779,14 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_snapshot_note_is_set_through_pvesh() {
+        let c = snap_note_cmd("pve", Kind::Lxc, 101, "before-upgrade", "kernel 6.8");
+        assert_eq!(c.prog, "pvesh");
+        assert_eq!(c.args, ["set", "/nodes/pve/lxc/101/snapshot/before-upgrade/config", "--description", "kernel 6.8"]);
+        assert_eq!(snap_note_cmd("n", Kind::Qemu, 5, "s", "").args[1], "/nodes/n/qemu/5/snapshot/s/config");
+    }
 
     #[test]
     fn backup_jobs_are_read_and_switched() {

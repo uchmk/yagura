@@ -124,6 +124,12 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// The note of a snapshot being typed.
+    SnapNote {
+        t: Target,
+        snap: String,
+        text: String,
+    },
     /// The scheduled backup jobs of the cluster (`None` while they are read) and the cursor.
     Jobs {
         list: Option<Vec<ops::BackupJob>>,
@@ -263,6 +269,16 @@ fn civil(z: i64) -> (i64, u32, u32) {
 }
 
 /// The last question for a snapshot operation. `free` is the room left on the storages that hold the guest's disks.
+/// The last question for changing the note of a snapshot (the guest is not touched).
+pub fn sure_snap_note(t: &Target, snap: &str, text: &str) -> Sure {
+    let shown = if text.is_empty() { "(empty)" } else { text };
+    Sure {
+        t: t.clone(),
+        op: Op::Cmds { label: format!("note {} {snap}", t.id), cmds: vec![ops::snap_note_cmd(&t.node, t.kind, t.id, snap, text)] },
+        lines: vec![(format!("set the note of snapshot {snap} of {} {} to: {shown}", t.id, t.name), false)],
+    }
+}
+
 pub fn sure_snap(t: &Target, op: SnapOp, free: Option<(String, u64)>) -> Sure {
     let mut lines = vec![(format!("{} {} ({}) of {}", op.verb(), snap_name(&op), t.id, t.name), false)];
     match &op {
@@ -664,9 +680,27 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                     let f = free(&t);
                     (Some(Dialog::Sure(sure_snap(&t, op, f))), Next::Nothing)
                 }
+                KeyCode::Char('e') if pick(&list, sel).is_some() => {
+                    let snap = pick(&list, sel).unwrap_or_default();
+                    let text = list.as_ref().and_then(|l| l.get(sel)).map(|s| s.description.clone()).unwrap_or_default();
+                    (Some(Dialog::SnapNote { t, snap, text }), Next::Nothing)
+                }
                 _ => (Some(Dialog::Snaps { t, list, sel }), Next::Nothing),
             }
         }
+        Dialog::SnapNote { t, snap, mut text } => match code {
+            KeyCode::Esc => (None, Next::Nothing),
+            KeyCode::Char(c) if !c.is_control() && text.chars().count() < 200 => {
+                text.push(c);
+                (Some(Dialog::SnapNote { t, snap, text }), Next::Nothing)
+            }
+            KeyCode::Backspace => {
+                text.pop();
+                (Some(Dialog::SnapNote { t, snap, text }), Next::Nothing)
+            }
+            KeyCode::Enter => (Some(Dialog::Sure(sure_snap_note(&t, &snap, &text))), Next::Nothing),
+            _ => (Some(Dialog::SnapNote { t, snap, text }), Next::Nothing),
+        },
         Dialog::Config { t, list, top } => {
             let n = list.as_ref().map_or(0, Vec::len);
             let top = match code {
@@ -994,6 +1028,28 @@ mod tests {
         let Some(Dialog::Sure(s)) = d else { panic!("no question") };
         assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
+        assert!(d.is_none());
+    }
+
+    #[test]
+    fn a_snapshot_note_is_typed_and_confirmed() {
+        let none = |_: &Target| None;
+        let mut t = Target::none();
+        t.id = 100;
+        t.name = "web".into();
+        t.node = "pve".into();
+        let snaps = vec![Snap { name: "s1".into(), time: 1, vmstate: false, description: "old".into() }];
+        let (d, _) = key(Dialog::Snaps { t: t.clone(), list: Some(snaps), sel: 0 }, KeyCode::Char('e'), none);
+        let Some(Dialog::SnapNote { text, snap, .. }) = d.clone() else { panic!("no editor") };
+        assert_eq!((text.as_str(), snap.as_str()), ("old", "s1"));
+        let (d, _) = key(d.unwrap(), KeyCode::Backspace, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('!'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        let want = ops::snap_note_cmd("pve", t.kind, 100, "s1", "ol!");
+        assert_eq!(s.op, Op::Cmds { label: "note 100 s1".into(), cmds: vec![want] });
+        // Esc leaves the guest and the note alone.
+        let (d, _) = key(Dialog::SnapNote { t, snap: "s1".into(), text: "x".into() }, KeyCode::Esc, none);
         assert!(d.is_none());
     }
 
