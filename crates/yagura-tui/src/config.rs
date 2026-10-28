@@ -16,11 +16,15 @@ pub struct Config {
     pub temp_hot: f32,
     /// Ring the terminal bell when a new alert appears.
     pub bell: bool,
+    /// The cleanup keeps this many of the newest backups of each guest.
+    pub keep_backups: usize,
+    /// The cleanup removes snapshots older than this many days.
+    pub snapshot_days: u64,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { stale_days: 7, disk_full: 90.0, storage_full: 90.0, temp_hot: 85.0, bell: true }
+        Config { stale_days: 7, disk_full: 90.0, storage_full: 90.0, temp_hot: 85.0, bell: true, keep_backups: 3, snapshot_days: 30 }
     }
 }
 
@@ -45,6 +49,12 @@ impl Config {
         if let Some(v) = t.get("bell").and_then(|v| v.as_bool()) {
             c.bell = v;
         }
+        if let Some(v) = num("keep_backups").filter(|v| *v >= 1.0) {
+            c.keep_backups = v as usize;
+        }
+        if let Some(v) = num("snapshot_days").filter(|v| *v >= 1.0) {
+            c.snapshot_days = v as u64;
+        }
         c
     }
 
@@ -62,6 +72,12 @@ impl Config {
         }
         if let Some(v) = num("YAGURA_TEMP_HOT").filter(|v| *v > 0.0) {
             self.temp_hot = v as f32;
+        }
+        if let Some(v) = num("YAGURA_KEEP_BACKUPS").filter(|v| *v >= 1.0) {
+            self.keep_backups = v as usize;
+        }
+        if let Some(v) = num("YAGURA_SNAPSHOT_DAYS").filter(|v| *v >= 1.0) {
+            self.snapshot_days = v as u64;
         }
         if let Some(v) = get("YAGURA_BELL") {
             self.bell = !matches!(v.trim(), "0" | "off" | "false" | "no");
@@ -104,5 +120,9 @@ mod tests {
         let c = Config::default().with_env(|k| (k == "YAGURA_BELL").then(|| "0".to_string()));
         assert!(!c.bell);
         assert_eq!(Config::from_toml("not toml ["), Config::default());
+        let c = Config::from_toml("keep_backups = 5\nsnapshot_days = 0\n");
+        assert_eq!((c.keep_backups, c.snapshot_days), (5, 30));
+        let c = c.with_env(|k| (k == "YAGURA_SNAPSHOT_DAYS").then(|| "14".to_string()));
+        assert_eq!(c.snapshot_days, 14);
     }
 }

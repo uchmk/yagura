@@ -69,6 +69,8 @@ pub struct App {
     pub task_log: Option<TaskLog>,
     /// A snapshot or backup being asked for (name, form, list, last y/n).
     pub dialog: Option<dialog::Dialog>,
+    /// The cleanup scan is running.
+    pub cleaning: bool,
 }
 
 /// One task's log: `lines` is `None` while it is read (or when it could not be).
@@ -111,6 +113,8 @@ enum Job {
     Snaps(u32, Vec<proxmox::ops::Snap>),
     /// A snapshot or backup finished: guest, what it was, result.
     Op(u32, String, Result<(), String>),
+    /// What the cleanup scan found to remove.
+    Cleanup(Vec<proxmox::ops::Item>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -120,7 +124,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  l logs  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  x stop task  l logs  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -153,6 +157,7 @@ fn main() -> std::io::Result<()> {
         results: None,
         task_log: None,
         dialog: None,
+        cleaning: false,
     };
     let mut term = ratatui::init();
     // ratatui leaves the hardware cursor where the last cell was written;
@@ -241,6 +246,17 @@ fn run(
                         Ok(()) => format!("{label} done"),
                         Err(e) => format!("{label} failed: {e}"),
                     };
+                }
+                Job::Cleanup(items) => {
+                    app.cleaning = false;
+                    let c = config::get();
+                    match dialog::sure_cleanup(items, c.snapshot_days, c.keep_backups) {
+                        Some(s) => {
+                            app.status.clear();
+                            app.dialog = Some(dialog::Dialog::Sure(s));
+                        }
+                        None => app.status = "cleanup: nothing to remove".into(),
+                    }
                 }
                 Job::Latest(key, tag) => {
                     app.model.latest.insert(key, tag);
@@ -354,6 +370,8 @@ fn run(
             KeyCode::Char('S') if matches!(app.view, View::Guests | View::Graph(_)) => open_snapshot(app),
             KeyCode::Char('b') if matches!(app.view, View::Guests | View::Graph(_)) => open_dump(app, jobs_tx),
             KeyCode::Char('m') if matches!(app.view, View::Guests | View::Graph(_)) => open_snaps(app, jobs_tx),
+            KeyCode::Char('C') if app.view == View::Guests => open_cleanup(app, jobs_tx),
+            KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
             KeyCode::Char(' ') if app.view == View::Guests => {
                 if let Some(id) = app.model.guests(app.sort).get(app.selected).map(|g| g.id)
                     && !app.marks.remove(&id)
@@ -478,6 +496,51 @@ fn open_snaps(app: &mut App, tx: &Sender<Job>) {
         .expect("spawn the snapshots thread");
 }
 
+/// `x` in the task screen: ask before stopping the running task under the cursor.
+fn open_stop(app: &mut App) {
+    let Some(t) = app.model.host_tasks.get(app.selected) else { return };
+    if t.end.is_some() {
+        app.status = "that task has finished".into();
+        return;
+    }
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Sure(dialog::sure_stop(t)));
+}
+
+/// `C`: look for old snapshots and backups beyond the keep count in the background, then ask.
+fn open_cleanup(app: &mut App, tx: &Sender<Job>) {
+    if app.cleaning {
+        return;
+    }
+    app.cleaning = true;
+    app.status = "cleanup: looking for old snapshots and backups...".into();
+    let guests: Vec<(u32, String, String, proxmox::Kind)> =
+        app.model.cluster.guests.iter().filter(|g| !g.template).map(|g| (g.id, g.name.clone(), g.node.clone(), g.kind)).collect();
+    let mut stores: Vec<(String, String)> = vec![];
+    for s in &app.model.cluster.storage {
+        if s.active && s.content.split(',').any(|c| c == "backup") {
+            stores.push((s.node.clone(), s.name.clone()));
+        }
+    }
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-cleanup".into())
+        .spawn(move || {
+            let c = config::get();
+            let now = model::unix_now();
+            let mut items = vec![];
+            for (id, name, node, kind) in guests {
+                let snaps = proxmox::ops::snapshots(&node, kind, id);
+                items.extend(proxmox::ops::plan_snapshots(id, &name, kind, &snaps, now, c.snapshot_days * 86400));
+            }
+            for (node, storage) in stores {
+                items.extend(proxmox::ops::plan_backups(&proxmox::ops::backups(&node, &storage), c.keep_backups));
+            }
+            let _ = tx.send(Job::Cleanup(items));
+        })
+        .expect("spawn the cleanup thread");
+}
+
 /// A key in a snapshot or backup dialog; `y` at the end runs the operation on a thread of its own.
 fn dialog_key(app: &mut App, code: KeyCode, tx: &Sender<Job>) {
     let Some(d) = app.dialog.take() else { return };
@@ -494,6 +557,7 @@ fn dialog_key(app: &mut App, code: KeyCode, tx: &Sender<Job>) {
             let r = match &op {
                 dialog::Op::Snap(s) => proxmox::ops::snapshot(t.kind, t.id, s),
                 dialog::Op::Dump(d) => proxmox::ops::vzdump(t.id, d),
+                dialog::Op::Cmds { cmds, .. } => proxmox::ops::run_all(cmds),
             };
             let _ = tx.send(Job::Op(t.id, label, r));
         })

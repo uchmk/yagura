@@ -294,9 +294,9 @@ fn help(f: &mut Frame) {
         "  Esc        back from a guest (in the list: clear the marks)",
         "  Space      mark a guest; u o d r then act on all marked",
         "  l          in a guest: switch processes / its log (j k scroll)",
-        "  u          install the waiting updates in the guest (asks first)",
-        "  o d r      start / shut down / reboot the guest (asks first)",
+        "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
+        "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
         "  q          quit",
         "",
         "MARKS",
@@ -746,9 +746,9 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     let keys = match app.view {
         View::Host => " Tab guests  ? help  q quit",
         View::Storage => " Tab next  j/k move  ? help  q quit",
-        View::Tasks => " Tab host  j/k move  Enter log  ? help  q quit",
+        View::Tasks => " Tab host  j/k move  Enter log  x stop  ? help  q quit",
         View::Guests => {
-            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  ? help  q quit"
+            " Tab view  j/k move  / find  s sort  Space mark  Enter graphs  u upgrade  o start  d shutdown  r reboot  S snap  b backup  m snaps  C clean  ? help  q quit"
         }
         View::Procs => " Tab storage  j/k move  ? help  q quit",
         View::Graph(_) => " Esc back  l logs/procs  j/k move  u upgrade  S snap  b backup  m snaps  ? help  q quit",
@@ -990,6 +990,7 @@ mod tests {
             results: None,
             task_log: None,
             dialog: None,
+            cleaning: false,
         }
     }
 

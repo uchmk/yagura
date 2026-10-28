@@ -3,8 +3,8 @@
 //! main loop opens them and runs the answer on a thread of its own.
 
 use ratatui::crossterm::event::KeyCode;
-use yagura_core::proxmox::ops::{self, Compress, Dump, Mode, Snap, SnapOp};
-use yagura_core::proxmox::{Guest, Kind, Storage};
+use yagura_core::proxmox::ops::{self, Cmd, Compress, Dump, Item, Mode, Snap, SnapOp};
+use yagura_core::proxmox::{Guest, HostTask, Kind, Storage};
 
 use crate::model::bytes;
 
@@ -25,6 +25,11 @@ impl Target {
     pub fn of(g: &Guest) -> Target {
         Target { id: g.id, name: g.name.clone(), kind: g.kind, node: g.node.clone(), maxmem: g.maxmem, used: g.disk, template: g.template }
     }
+
+    /// No guest: the question is about a task, a storage or the node (id 0 never matches a guest).
+    pub fn none() -> Target {
+        Target { id: 0, name: String::new(), kind: Kind::Qemu, node: String::new(), maxmem: 0, used: 0, template: false }
+    }
 }
 
 /// What the last question will run.
@@ -32,6 +37,11 @@ impl Target {
 pub enum Op {
     Snap(SnapOp),
     Dump(Dump),
+    /// Commands run one after the other, under a label for the status line.
+    Cmds {
+        label: String,
+        cmds: Vec<Cmd>,
+    },
 }
 
 impl Op {
@@ -39,6 +49,7 @@ impl Op {
         match self {
             Op::Snap(s) => format!("{}: {} {}", t.id, s.verb(), snap_name(s)),
             Op::Dump(d) => format!("{}: backup to {}", t.id, d.storage),
+            Op::Cmds { label, .. } => label.clone(),
         }
     }
 }
@@ -180,6 +191,47 @@ pub fn sure_dump(f: &DumpForm) -> Option<Sure> {
     Some(Sure { t: f.t.clone(), op: Op::Dump(d), lines })
 }
 
+/// The last question for stopping a running task.
+pub fn sure_stop(t: &HostTask) -> Sure {
+    let what = if t.id.is_empty() { t.kind.clone() } else { format!("{} {}", t.kind, t.id) };
+    let lines = vec![
+        (format!("stop the running task {what} on {}", t.node), false),
+        ("the work done so far is abandoned; a backup that is cut off is not kept".into(), t.kind == "vzdump"),
+    ];
+    let cmds = vec![ops::stop_task_cmd(&t.node, &t.upid)];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("stop {what}"), cmds }, lines }
+}
+
+/// How many items the cleanup question lists before it says "and N more".
+const LISTED: usize = 12;
+
+/// The last question for the cleanup: what goes, and how much room the backups give back.
+pub fn sure_cleanup(items: Vec<Item>, snapshot_days: u64, keep: usize) -> Option<Sure> {
+    if items.is_empty() {
+        return None;
+    }
+    let freed: u64 = items.iter().map(|i| i.bytes).sum();
+    let mut lines = vec![(
+        format!(
+            "remove {} old items: snapshots older than {snapshot_days} days, backups beyond the newest {keep} of each guest",
+            items.len()
+        ),
+        false,
+    )];
+    for i in items.iter().take(LISTED) {
+        let size = if i.bytes > 0 { format!("  ({})", bytes(i.bytes)) } else { String::new() };
+        lines.push((format!("  {}{size}", i.what), false));
+    }
+    if items.len() > LISTED {
+        lines.push((format!("  ... and {} more", items.len() - LISTED), false));
+    }
+    lines.push((format!("gives back about {} of backups; the size of a snapshot is not known", bytes(freed)), false));
+    lines.push(("what is removed can not be brought back; protected backups are left alone".into(), true));
+    let label = format!("cleanup of {} items", items.len());
+    let cmds = items.into_iter().map(|i| i.cmd).collect();
+    Some(Sure { t: Target::none(), op: Op::Cmds { label, cmds }, lines })
+}
+
 /// A key in a dialog: the dialog that stays (or none), and what to run.
 pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u64)>) -> (Option<Dialog>, Next) {
     match d {
@@ -301,6 +353,25 @@ mod tests {
         let (d, _) = key(Dialog::Name { t: target(Kind::Lxc), text: String::new() }, KeyCode::Enter, none);
         assert!(matches!(d, Some(Dialog::Name { .. })));
         let (d, n) = key(Dialog::Sure(sure_snap(&target(Kind::Lxc), SnapOp::Delete("a".into()), None)), KeyCode::Char('n'), none);
+        assert!(d.is_none() && matches!(n, Next::Nothing));
+    }
+
+    #[test]
+    fn cleanup_and_task_stop_ask_before_running() {
+        assert!(sure_cleanup(vec![], 30, 3).is_none());
+        let item = |n: u32, bytes| Item { what: format!("backup {n}"), bytes, cmd: Cmd::new("pvesm", &["free", &n.to_string()]) };
+        let s = sure_cleanup((0..15).map(|n| item(n, 1 << 30)).collect(), 30, 3).unwrap();
+        assert!(s.lines.iter().any(|(l, _)| l.contains("and 3 more")));
+        assert!(s.lines.iter().any(|(l, _)| l.contains("15.0") || l.contains("about 15")));
+        let Op::Cmds { cmds, .. } = &s.op else { panic!("not commands") };
+        assert_eq!(cmds.len(), 15);
+        let (d, n) = key(Dialog::Sure(s), KeyCode::Char('y'), |_| None);
+        assert!(d.is_none() && matches!(n, Next::Run(t, _) if t.id == 0));
+        let t = HostTask { node: "pve".into(), upid: "UPID:pve:1".into(), kind: "vzdump".into(), id: "101".into(), ..Default::default() };
+        let s = sure_stop(&t);
+        assert_eq!(s.op.label(&s.t), "stop vzdump 101");
+        assert!(s.lines[1].1);
+        let (d, n) = key(Dialog::Sure(s), KeyCode::Char('n'), |_| None);
         assert!(d.is_none() && matches!(n, Next::Nothing));
     }
 

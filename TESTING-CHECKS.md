@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-261 rows to press (261 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+263 rows to press (263 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -277,6 +277,8 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.27** `S` asks a snapshot name (default `yagura-YYYYMMDD-HHMM`), a VM also asks about the memory, then a y/n that shows the free space of the storage; `y` creates it and the status line says done.
 - [ ] **3p.28** `b` opens the backup form (storage, mode, compression, expected size, free space), Enter shows the y/n with a red `NOT ENOUGH` when the target is short; `y` starts `vzdump` and the task shows in the tasks screen.
 - [ ] **3p.29** `m` lists the guest's snapshots; `d` deletes and `r` rolls back, each behind its own y/n (the rollback warns in red); any other key cancels without touching the guest.
+- [ ] **3p.30** `C` in the guests screen says it is looking, then lists the snapshots older than `snapshot_days` and the backups beyond `keep_backups` per guest (protected ones never), with the size to be given back; `y` removes them one by one and the status line says done, any other key removes nothing.
+- [ ] **3p.31** `x` in the tasks screen on a running task (e.g. a vzdump) asks y/n (red warning for a backup); `y` stops it and it ends in the list; on a finished task `x` only says it has finished.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

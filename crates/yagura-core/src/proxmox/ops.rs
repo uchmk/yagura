@@ -205,6 +205,196 @@ pub fn backup_estimate(last: Option<u64>, used: u64, c: Compress) -> u64 {
     last.unwrap_or((used as f64 * c.ratio()) as u64)
 }
 
+/// A command to run on the node: the tool and its arguments.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cmd {
+    pub prog: String,
+    pub args: Vec<String>,
+}
+
+impl Cmd {
+    pub fn new(prog: &str, args: &[&str]) -> Cmd {
+        Cmd { prog: prog.to_string(), args: args.iter().map(|a| a.to_string()).collect() }
+    }
+}
+
+/// Run the commands one after the other; the first that fails ends it, and the error says which one.
+pub fn run_all(cmds: &[Cmd]) -> Result<(), String> {
+    for (i, c) in cmds.iter().enumerate() {
+        run(&c.prog, &c.args).map_err(|e| if cmds.len() > 1 { format!("{} of {}: {e}", i + 1, cmds.len()) } else { e })?;
+    }
+    Ok(())
+}
+
+/// Stop a running task (`pvesh delete` on the task asks the node to kill it).
+pub fn stop_task_cmd(node: &str, upid: &str) -> Cmd {
+    Cmd::new("pvesh", &["delete", &format!("/nodes/{node}/tasks/{upid}")])
+}
+
+/// One backup file on a storage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Backup {
+    pub volid: String,
+    pub storage: String,
+    pub node: String,
+    pub vmid: u32,
+    pub ctime: u64,
+    pub size: u64,
+    pub protected: bool,
+    pub notes: String,
+}
+
+impl Backup {
+    /// A VM or a container, from the file name (`vzdump-qemu-100-...`, `vzdump-lxc-101-...`).
+    pub fn kind(&self) -> Option<Kind> {
+        if self.volid.contains("vzdump-qemu-") {
+            Some(Kind::Qemu)
+        } else if self.volid.contains("vzdump-lxc-") {
+            Some(Kind::Lxc)
+        } else {
+            None
+        }
+    }
+}
+
+/// The backups in a storage content listing, newest first.
+pub fn parse_backup_list(json: &str, node: &str, storage: &str) -> Vec<Backup> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let mut out: Vec<Backup> = v
+        .as_array()
+        .map(|l| {
+            l.iter()
+                .filter_map(|b| {
+                    Some(Backup {
+                        volid: b["volid"].as_str()?.to_string(),
+                        storage: storage.to_string(),
+                        node: node.to_string(),
+                        vmid: b["vmid"].as_u64().unwrap_or(0) as u32,
+                        ctime: b["ctime"].as_u64()?,
+                        size: b["size"].as_u64().unwrap_or(0),
+                        protected: b["protected"].as_u64().unwrap_or(0) != 0 || b["protected"].as_bool().unwrap_or(false),
+                        notes: b["notes"].as_str().unwrap_or("").trim().to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by_key(|b| std::cmp::Reverse(b.ctime));
+    out
+}
+
+/// The backup files on a storage (read-only `pvesh`), newest first.
+pub fn backups(node: &str, storage: &str) -> Vec<Backup> {
+    pvesh(&format!("/nodes/{node}/storage/{storage}/content"), &["--content", "backup"])
+        .map(|j| parse_backup_list(&j, node, storage))
+        .unwrap_or_default()
+}
+
+/// Delete a backup file (`pvesm free`; Proxmox refuses a protected one).
+pub fn backup_delete_cmd(b: &Backup) -> Cmd {
+    Cmd::new("pvesm", &["free", &b.volid])
+}
+
+/// Restore a backup as a new guest. Never to an id that exists, so nothing is overwritten.
+pub fn restore_cmd(b: &Backup, newid: u32, storage: Option<&str>) -> Option<Cmd> {
+    let id = newid.to_string();
+    let mut c = match b.kind()? {
+        Kind::Qemu => Cmd::new("qmrestore", &[&b.volid, &id]),
+        Kind::Lxc => Cmd::new("pct", &["restore", &id, &b.volid]),
+    };
+    if let Some(s) = storage {
+        c.args.extend(["--storage".to_string(), s.to_string()]);
+    }
+    Some(c)
+}
+
+/// The id Proxmox would give a new guest (`pvesh get /cluster/nextid` prints it, with quotes).
+pub fn parse_next_id(text: &str) -> Option<u32> {
+    text.trim().trim_matches('"').parse().ok()
+}
+
+pub fn next_id() -> Option<u32> {
+    pvesh("/cluster/nextid", &[]).and_then(|t| parse_next_id(&t))
+}
+
+/// A guest's configuration as `key: value` pairs, keys sorted (`digest` left out).
+pub fn parse_config(json: &str) -> Vec<(String, String)> {
+    let Ok(Value::Object(m)) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let mut out: Vec<(String, String)> = m
+        .into_iter()
+        .filter(|(k, _)| k != "digest")
+        .map(|(k, v)| {
+            let v = match v {
+                Value::String(s) => s,
+                other => other.to_string(),
+            };
+            (k, v.replace('\n', " ").trim().to_string())
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The configuration of a guest (read-only `pvesh`).
+pub fn config(node: &str, kind: Kind, id: u32) -> Option<Vec<(String, String)>> {
+    let what = if kind == Kind::Lxc { "lxc" } else { "qemu" };
+    pvesh(&format!("/nodes/{node}/{what}/{id}/config"), &[]).map(|j| parse_config(&j)).filter(|c| !c.is_empty())
+}
+
+/// `qm set` / `pct set` for the memory (MiB) and the number of cores.
+pub fn set_cmd(kind: Kind, id: u32, mem_mib: Option<u32>, cores: Option<u32>) -> Cmd {
+    let mut c = Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string()]);
+    if let Some(m) = mem_mib {
+        c.args.extend(["--memory".to_string(), m.to_string()]);
+    }
+    if let Some(n) = cores {
+        c.args.extend(["--cores".to_string(), n.to_string()]);
+    }
+    c
+}
+
+/// Maintenance mode of a node in an HA cluster.
+pub fn maintenance_cmd(node: &str, on: bool) -> Cmd {
+    Cmd::new("ha-manager", &["crm-command", "node-maintenance", if on { "enable" } else { "disable" }, node])
+}
+
+/// Something the cleanup would remove: what it is, the room it frees (0 when unknown) and the command.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Item {
+    pub what: String,
+    pub bytes: u64,
+    pub cmd: Cmd,
+}
+
+/// The snapshots of a guest older than `limit` seconds at `now`.
+pub fn plan_snapshots(id: u32, name: &str, kind: Kind, snaps: &[Snap], now: u64, limit: u64) -> Vec<Item> {
+    snaps
+        .iter()
+        .filter(|s| s.time > 0 && now.saturating_sub(s.time) >= limit)
+        .map(|s| {
+            let (prog, args) = snap_command(kind, id, &SnapOp::Delete(s.name.clone()));
+            Item { what: format!("snapshot {} of {id} {name}", s.name), bytes: 0, cmd: Cmd { prog: prog.to_string(), args } }
+        })
+        .collect()
+}
+
+/// The backups beyond the newest `keep` of each guest; a protected one is never listed and does not count.
+pub fn plan_backups(list: &[Backup], keep: usize) -> Vec<Item> {
+    let mut vmids: Vec<u32> = list.iter().map(|b| b.vmid).collect();
+    vmids.sort_unstable();
+    vmids.dedup();
+    let mut out = vec![];
+    for id in vmids {
+        let mut mine: Vec<&Backup> = list.iter().filter(|b| b.vmid == id && !b.protected).collect();
+        mine.sort_by_key(|b| std::cmp::Reverse(b.ctime));
+        for b in mine.into_iter().skip(keep) {
+            let file = b.volid.rsplit('/').next().unwrap_or(&b.volid);
+            out.push(Item { what: format!("backup of {id} on {}: {file}", b.storage), bytes: b.size, cmd: backup_delete_cmd(b) });
+        }
+    }
+    out
+}
+
 /// Run a tool and wait; the error is the line that says what went wrong.
 fn run(prog: &str, args: &[String]) -> Result<(), String> {
     let o = Command::new(prog).args(args).output().map_err(|e| format!("{prog}: {e}"))?;
@@ -267,5 +457,40 @@ mod tests {
         assert_eq!(backup_estimate(Some(7), 100, Compress::Zstd), 7);
         assert_eq!(backup_estimate(None, 100, Compress::Zstd), 50);
         assert_eq!(Compress::None.name(), "0");
+    }
+
+    #[test]
+    fn backups_restore_config_and_cleanup() {
+        let j = r#"[{"volid":"nas:backup/vzdump-lxc-101-2026_10_01.tar.zst","ctime":10,"size":5,"vmid":101,"protected":0,"notes":" n "},
+            {"volid":"nas:backup/vzdump-qemu-100-2026_10_02.vma.zst","ctime":20,"size":7,"vmid":100,"protected":1},
+            {"volid":"nas:backup/vzdump-lxc-101-2026_10_03.tar.zst","ctime":30,"size":6,"vmid":101},
+            {"volid":"nas:backup/vzdump-lxc-101-2026_10_04.tar.zst","ctime":40,"size":6,"vmid":101}]"#;
+        let l = parse_backup_list(j, "pve", "nas");
+        assert_eq!(l.iter().map(|b| b.ctime).collect::<Vec<_>>(), [40, 30, 20, 10]);
+        assert!(l[2].protected && !l[3].protected && l[3].notes == "n");
+        assert_eq!(l[2].kind(), Some(Kind::Qemu));
+        assert_eq!(
+            restore_cmd(&l[2], 120, Some("local-lvm")).unwrap(),
+            Cmd::new("qmrestore", &["nas:backup/vzdump-qemu-100-2026_10_02.vma.zst", "120", "--storage", "local-lvm"])
+        );
+        assert_eq!(restore_cmd(&l[3], 121, None).unwrap().args[..2], ["restore", "121"]);
+        // Keep the newest 1 of guest 101; the protected backup of 100 is never offered.
+        let plan = plan_backups(&l, 1);
+        assert_eq!(plan.iter().map(|i| i.bytes).collect::<Vec<_>>(), [6, 5]);
+        assert_eq!(plan[0].cmd, Cmd::new("pvesm", &["free", "nas:backup/vzdump-lxc-101-2026_10_03.tar.zst"]));
+        assert!(plan_backups(&l, 3).is_empty());
+        assert_eq!(parse_next_id("\"105\"\n"), Some(105));
+        assert_eq!(parse_next_id("x"), None);
+        let c = parse_config(r#"{"memory":2048,"digest":"x","name":"web","net0":"virtio,bridge=vmbr0"}"#);
+        assert_eq!(c.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["memory", "name", "net0"]);
+        assert_eq!(c[0].1, "2048");
+        assert_eq!(set_cmd(Kind::Lxc, 101, Some(1024), Some(2)).args, ["set", "101", "--memory", "1024", "--cores", "2"]);
+        assert_eq!(set_cmd(Kind::Qemu, 7, None, Some(4)), Cmd::new("qm", &["set", "7", "--cores", "4"]));
+        assert_eq!(maintenance_cmd("pve", true).args, ["crm-command", "node-maintenance", "enable", "pve"]);
+        assert_eq!(stop_task_cmd("pve", "UPID:pve:1").args, ["delete", "/nodes/pve/tasks/UPID:pve:1"]);
+        let snap = |name: &str, time| Snap { name: name.into(), time, vmstate: false, description: String::new() };
+        let p = plan_snapshots(7, "web", Kind::Qemu, &[snap("old", 100), snap("new", 900)], 1000, 500);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].cmd, Cmd::new("qm", &["delsnapshot", "7", "old"]));
     }
 }
