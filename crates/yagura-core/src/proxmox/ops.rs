@@ -361,6 +361,8 @@ pub struct BackupJob {
     pub mode: String,
     pub node: String,
     pub next_run: Option<u64>,
+    /// The `prune-backups` setting (`keep-last=3,keep-daily=7`); empty when the job has none.
+    pub prune: String,
 }
 
 /// The jobs in a `/cluster/backup` listing (a job that does not say `enabled` is on).
@@ -388,6 +390,7 @@ pub fn parse_backup_jobs(json: &str) -> Vec<BackupJob> {
                         mode: s("mode"),
                         node: s("node"),
                         next_run: j["next-run"].as_u64(),
+                        prune: s("prune-backups"),
                     })
                 })
                 .collect()
@@ -461,6 +464,38 @@ pub fn backup_job_save_cmd(id: Option<&str>, fields: &[String; 4]) -> Result<Cmd
     a.extend(more.iter().map(|s| s.to_string()));
     let args: Vec<&str> = a.iter().map(String::as_str).collect();
     Ok(Cmd::new("pvesh", &args))
+}
+
+/// The `keep-*` options of `prune-backups`, in the order of the retention form.
+pub const PRUNE_KEYS: [&str; 6] = ["keep-last", "keep-hourly", "keep-daily", "keep-weekly", "keep-monthly", "keep-yearly"];
+
+/// The six retention values out of a `prune-backups` string (`keep-last=3,keep-daily=7`); a missing one is empty.
+pub fn parse_prune(s: &str) -> [String; 6] {
+    PRUNE_KEYS.map(|k| s.split(',').find_map(|p| p.strip_prefix(k)?.strip_prefix('=')).unwrap_or("").to_string())
+}
+
+/// `pvesh set /cluster/backup/<id> --prune-backups …` (or `--delete prune-backups` when every value is empty). Values are counts.
+pub fn backup_prune_cmd(id: &str, vals: &[String; 6]) -> Result<Cmd, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+        return Err("the job id is wrong".into());
+    }
+    let mut parts = vec![];
+    for (k, v) in PRUNE_KEYS.iter().zip(vals) {
+        let v = v.trim();
+        if v.is_empty() {
+            continue;
+        }
+        if v.len() > 4 || !v.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(format!("{k} is a number of backups to keep"));
+        }
+        parts.push(format!("{k}={}", v.parse::<u32>().unwrap_or(0)));
+    }
+    let path = format!("/cluster/backup/{id}");
+    Ok(if parts.is_empty() {
+        Cmd::new("pvesh", &["set", &path, "--delete", "prune-backups"])
+    } else {
+        Cmd::new("pvesh", &["set", &path, "--prune-backups", &parts.join(",")])
+    })
 }
 
 /// One HA-managed guest (`Datacenter > HA`): what is asked for and what the manager reports.
@@ -2000,6 +2035,7 @@ mod tests {
             mode: "snapshot".into(),
             node: node.into(),
             next_run: None,
+            prune: String::new(),
         };
         let base = ["create", "/nodes/pve2/vzdump", "--storage", "nas", "--mode", "snapshot"];
         assert_eq!(backup_job_run_cmd(&job("all", "pve2"), "pve1").args, [&base[..], &["--all", "1"]].concat());
@@ -2154,6 +2190,26 @@ mod tests {
         let m = disk_move_cmd("pve", Kind::Lxc, 200, "mp0", "tank");
         assert_eq!(m.args[1], "/nodes/pve/lxc/200/move_volume");
         assert_eq!(disk_detach_cmd(Kind::Qemu, 100, "scsi1").args, ["set", "100", "--delete", "scsi1"]);
+    }
+
+    #[test]
+    fn backup_retention_is_read_and_set() {
+        assert_eq!(parse_prune("keep-last=3,keep-daily=7"), ["3", "", "7", "", "", ""]);
+        assert_eq!(parse_prune(""), [""; 6].map(String::from));
+        let jobs = parse_backup_jobs(r#"[{"id":"backup-1","prune-backups":"keep-weekly=4"},{"id":"b2"}]"#);
+        assert_eq!((jobs[0].prune.as_str(), jobs[1].prune.as_str()), ("keep-weekly=4", ""));
+        let v = ["3", "", "7", "", "", "1"].map(String::from);
+        assert_eq!(
+            backup_prune_cmd("backup-1", &v).unwrap().args,
+            ["set", "/cluster/backup/backup-1", "--prune-backups", "keep-last=3,keep-daily=7,keep-yearly=1"]
+        );
+        assert_eq!(
+            backup_prune_cmd("backup-1", &Default::default()).unwrap().args,
+            ["set", "/cluster/backup/backup-1", "--delete", "prune-backups"]
+        );
+        let bad = ["x", "", "", "", "", ""].map(String::from);
+        assert!(backup_prune_cmd("b", &bad).is_err() && backup_prune_cmd("a b", &v).is_err());
+        assert!(backup_prune_cmd("b", &["99999", "", "", "", "", ""].map(String::from)).is_err());
     }
 
     #[test]

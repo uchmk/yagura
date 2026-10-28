@@ -424,6 +424,24 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ));
             (format!(" grow a disk of {} {} ", t.id, t.name), l)
         }
+        Dialog::Retention { id, vals, field, err } => {
+            let mut l =
+                vec![Line::styled(format!("backup job {id}: how many to keep"), Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
+            for (i, k) in yagura_core::proxmox::ops::PRUNE_KEYS.iter().enumerate() {
+                let on = i == *field;
+                let st = if on { Style::new().add_modifier(Modifier::BOLD) } else { Style::new() };
+                l.push(Line::styled(format!("  {k:<13} {}{}", vals[i], if on { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            if !err.is_empty() {
+                l.push(Line::styled(err.clone(), RED));
+            }
+            l.push(Line::styled(
+                "Tab/Up/Down field  digits  an empty field is not set; all empty removes the retention  Enter ask  Esc close",
+                DIM,
+            ));
+            (" retention ".to_string(), l)
+        }
         Dialog::CloudInit { t, v, field, loaded } => {
             let mut l =
                 vec![Line::styled(format!("{} {}: cloud-init", t.id, t.name), Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
@@ -595,7 +613,10 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 }
             }
             l.push(Line::raw(""));
-            l.push(Line::styled("j/k move  Enter on/off  n new  c change  d delete  r run now (each asks first)  Esc close", DIM));
+            l.push(Line::styled(
+                "j/k move  Enter on/off  n new  c change  p retention  d delete  r run now (each asks first)  Esc close",
+                DIM,
+            ));
             (" backup jobs ".to_string(), l)
         }
         Dialog::NodeEdit { node, step, vals, err } => {
@@ -2316,6 +2337,7 @@ mod tests {
             mode: "snapshot".into(),
             node: String::new(),
             next_run: None,
+            prune: String::new(),
         };
         a.dialog = Some(Dialog::Jobs { list: Some(vec![j("backup-1", true), j("backup-2", false)]), sel: 0 });
         let s = text(&render(&a));
@@ -2405,6 +2427,16 @@ mod tests {
             Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), keys: vec![], sel: 0, gib: "10".into() });
         let s = text(&render(&a));
         assert!(s.contains("scsi0") && s.contains("size=32G") && s.contains("10_"), "{s}");
+    }
+
+    #[test]
+    fn the_retention_form_draws() {
+        let mut a = app(View::Guests);
+        let vals = ["3", "", "7", "", "", ""].map(String::from);
+        a.dialog =
+            Some(Dialog::Retention { id: "backup-1".into(), vals, field: 2, err: "keep-last is a number of backups to keep".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("backup-1") && s.contains("keep-daily") && s.contains("7_") && s.contains("number of backups"), "{s}");
     }
 
     #[test]

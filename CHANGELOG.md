@@ -6,6 +6,12 @@
 
 ## [未リリース]
 
+## [0.73.110] - 2026-10-28
+
+### 追加
+
+- yagura-tui: バックアップジョブの保持数（`prune-backups`）を直せる。`b` のジョブの一覧で `p` を押すと `keep-last`・`keep-hourly`・`keep-daily`・`keep-weekly`・`keep-monthly`・`keep-yearly` の欄が今の値で開き、数字を入れて Enter、y/n のあと `pvesh set /cluster/backup/<id> --prune-backups …`。全部を空にすると設定を外す（ストレージ側の設定になる）。数を減らすと次の実行で古いバックアップが消えるので、確認に赤い行を出す。
+
 ## [0.73.109] - 2026-10-28
 
 ### 追加

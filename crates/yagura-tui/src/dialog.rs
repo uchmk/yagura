@@ -231,6 +231,13 @@ pub enum Dialog {
         vals: [String; 2],
         err: String,
     },
+    /// How many backups a job keeps (`p` in the jobs list): the six `keep-*` counts. Empty counts are not set.
+    Retention {
+        id: String,
+        vals: [String; 6],
+        field: usize,
+        err: String,
+    },
     /// The cloud-init settings of a VM (`I`): user, IP, DNS, search domain, SSH keys file. Empty fields are left as they are.
     CloudInit {
         t: Target,
@@ -887,6 +894,19 @@ pub fn sure_job_save(id: Option<&str>, vals: &[String; 4], cmd: ops::Cmd) -> Sur
     Sure { t: Target::none(), op: Op::Cmds { label: format!("job {}", id.unwrap_or("new")), cmds: vec![cmd] }, lines }
 }
 
+/// The last question for changing how many backups job `id` keeps. A smaller count removes the older backups at the next run.
+pub fn sure_retention(id: &str, vals: &[String; 6], cmd: ops::Cmd) -> Sure {
+    let kept: Vec<String> =
+        ops::PRUNE_KEYS.iter().zip(vals).filter(|(_, v)| !v.trim().is_empty()).map(|(k, v)| format!("{k}={}", v.trim())).collect();
+    let head = if kept.is_empty() {
+        format!("remove the retention of the backup job {id} (the storage's own setting applies)")
+    } else {
+        format!("keep {} for the backup job {id}", kept.join(", "))
+    };
+    let lines = vec![(head, false), ("backups beyond these counts are deleted when the job runs next".to_string(), true)];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("retention of {id}"), cmds: vec![cmd] }, lines }
+}
+
 /// The last question for changing a node's time zone and resolver.
 pub fn sure_node_save(node: &str, vals: &[String; 5], cmds: Vec<ops::Cmd>) -> Sure {
     let dns: Vec<&str> = vals[2..].iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
@@ -1286,6 +1306,12 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                         return (Some(Dialog::JobEdit { id: Some(j.id.clone()), step: 0, vals, err: String::new() }), Next::Nothing);
                     }
                 }
+                KeyCode::Char('p') => {
+                    if let Some(j) = list.as_ref().and_then(|l| l.get(sel)) {
+                        let vals = ops::parse_prune(&j.prune);
+                        return (Some(Dialog::Retention { id: j.id.clone(), vals, field: 0, err: String::new() }), Next::Nothing);
+                    }
+                }
                 KeyCode::Char('d') => {
                     if let Some(j) = list.as_ref().and_then(|l| l.get(sel)) {
                         return (Some(Dialog::Sure(sure_job_delete(j))), Next::Nothing);
@@ -1564,6 +1590,24 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 },
                 _ => stay(t, disks, keys, sel, gib),
             }
+        }
+        Dialog::Retention { id, mut vals, mut field, mut err } => {
+            let n = vals.len();
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Tab | KeyCode::Down => field = (field + 1) % n,
+                KeyCode::BackTab | KeyCode::Up => field = (field + n - 1) % n,
+                KeyCode::Backspace => {
+                    vals[field].pop();
+                }
+                KeyCode::Char(c) if c.is_ascii_digit() && vals[field].len() < 4 => vals[field].push(c),
+                KeyCode::Enter => match ops::backup_prune_cmd(&id, &vals) {
+                    Ok(cmd) => return (Some(Dialog::Sure(sure_retention(&id, &vals, cmd))), Next::Nothing),
+                    Err(e) => err = e,
+                },
+                _ => {}
+            }
+            (Some(Dialog::Retention { id, vals, field, err }), Next::Nothing)
         }
         Dialog::CloudInit { t, mut v, mut field, loaded } => {
             let n = v.len();
@@ -2015,6 +2059,7 @@ mod tests {
             mode: "snapshot".into(),
             node: String::new(),
             next_run: None,
+            prune: String::new(),
         };
         let jobs = || Dialog::Jobs { list: Some(vec![job.clone()]), sel: 0 };
         // `n` starts a new job with the defaults; an empty storage is refused, then the four steps lead to a question.
@@ -2206,6 +2251,7 @@ mod tests {
             mode: "snapshot".into(),
             node: String::new(),
             next_run: None,
+            prune: String::new(),
         };
         let list = vec![job("backup-1", true), job("backup-2", false)];
         let (d, _) = key(Dialog::Jobs { list: Some(list.clone()), sel: 0 }, KeyCode::Down, none);
@@ -2417,6 +2463,38 @@ mod tests {
         let Some(Dialog::Sure(s)) = key(open(2), KeyCode::Char('d'), none).0 else { panic!("no destroy question") };
         assert!(s.lines[0].1 && s.lines[0].0.starts_with("destroy unused0"));
         assert!(sure_disk_detach(&target(Kind::Lxc), "rootfs", "a:r").is_none());
+    }
+
+    #[test]
+    fn retention_is_opened_edited_and_set() {
+        let none = |_: &Target| None;
+        let job = ops::BackupJob {
+            id: "backup-1".into(),
+            enabled: true,
+            schedule: "21:00".into(),
+            storage: "nas".into(),
+            scope: "all".into(),
+            mode: "snapshot".into(),
+            node: String::new(),
+            next_run: None,
+            prune: "keep-last=3".into(),
+        };
+        let (d, _) = key(Dialog::Jobs { list: Some(vec![job]), sel: 0 }, KeyCode::Char('p'), none);
+        let Some(Dialog::Retention { ref vals, .. }) = d else { panic!("no form") };
+        assert_eq!(vals[0], "3");
+        // Down, 7: keep-hourly=7; a letter is ignored; Enter asks with a red line.
+        let (d, _) = key(d.unwrap(), KeyCode::Down, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('7'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Char('x'), none);
+        let Some(Dialog::Sure(s)) = key(d.unwrap(), KeyCode::Enter, none).0 else { panic!("no question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds {
+                label: "retention of backup-1".into(),
+                cmds: vec![ops::backup_prune_cmd("backup-1", &["3", "7", "", "", "", ""].map(String::from)).unwrap()]
+            }
+        );
+        assert!(s.lines.iter().any(|(_, red)| *red));
     }
 
     #[test]
