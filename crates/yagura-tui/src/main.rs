@@ -139,7 +139,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -421,6 +421,11 @@ fn run(
                         KeyCode::Char('G') | KeyCode::End => t.back = 0,
                         KeyCode::PageUp => t.back = (t.back + 10).min(n),
                         KeyCode::PageDown => t.back = t.back.saturating_sub(10),
+                        KeyCode::Char('w') if t.lines.is_some() => {
+                            let base = t.title.split(" [saved").next().unwrap_or_default().to_string();
+                            let r = save_log(&t.title, t.lines.as_deref().unwrap_or_default());
+                            t.title = format!("{base} [{r}]");
+                        }
                         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => app.task_log = None,
                         _ => {}
                     }
@@ -485,6 +490,7 @@ fn run(
                 app.procs_at = None;
                 app.procs_busy = false;
             }
+            KeyCode::Char('w') if app.log && matches!(app.view, View::Graph(_)) => save_guest_log(app),
             KeyCode::Char('j') | KeyCode::Down if app.log && matches!(app.view, View::Graph(_)) => {
                 app.log_back = app.log_back.saturating_sub(1)
             }
@@ -726,6 +732,26 @@ fn find_key(find: &mut find::Find, lines: &[String], back: &mut usize, code: Key
         *back = b;
     }
     true
+}
+
+/// Write a log to a new file in the home directory (or `/tmp`); the answer is what to tell the user.
+fn save_log(label: &str, lines: &[String]) -> String {
+    let dir = std::env::var_os("HOME").map(std::path::PathBuf::from).filter(|p| p.is_dir()).unwrap_or_else(|| "/tmp".into());
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    match proxmox::ops::export_lines(&dir, label, secs, lines) {
+        Ok(p) => format!("saved {} lines to {}", lines.len(), p.display()),
+        Err(e) => format!("save failed: {e}"),
+    }
+}
+
+/// `w` in the entered guest's journal: write what is shown to a file.
+fn save_guest_log(app: &mut App) {
+    let View::Graph(id) = app.view else { return };
+    let Some(lines) = app.model.guest_logs.get(&id).and_then(|l| l.as_ref()).filter(|l| !l.is_empty()) else {
+        app.status = "no log to save".into();
+        return;
+    };
+    app.status = save_log(&format!("guest {id}"), lines);
 }
 
 /// The search in the entered guest's journal.

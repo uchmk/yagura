@@ -463,7 +463,7 @@ fn task_log(f: &mut Frame, t: &crate::TaskLog) {
             l[from..end].iter().map(|x| found(&t.find, x)).collect()
         }
     };
-    let title = format!(" {} - j/k scroll  g/G top/bottom  / find  Esc close ", t.title);
+    let title = format!(" {} - j/k scroll  g/G top/bottom  / find  w save  Esc close ", t.title);
     let mut block = Block::bordered().title(title);
     if let Some(b) = find_bar(&t.find) {
         block = block.title_bottom(b);
@@ -845,7 +845,7 @@ fn guest_procs(f: &mut Frame, app: &App, id: u32, area: Rect) {
 fn guest_log(f: &mut Frame, app: &App, id: u32, name: &str, area: Rect) {
     let title = match find_bar(&app.log_find) {
         Some(b) => format!(" log of {id} {name} {b}"),
-        None => format!(" log of {id} {name}  (l processes, j/k scroll, / find) "),
+        None => format!(" log of {id} {name}  (l processes, j/k scroll, / find, w save) "),
     };
     let block = Block::new().borders(Borders::TOP).title(title);
     let lines = match app.model.guest_logs.get(&id) {

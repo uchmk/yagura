@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-283 rows to press (283 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+284 rows to press (284 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -299,6 +299,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.49** `N` lists the guest's network devices; Up/Down pick one, Tab moves between bridge, VLAN and MAC (a bad VLAN or MAC turns red and Enter does nothing), Enter shows the old and new value and asks y/n; then `qm set` / `pct set --netN` applies it and `c` shows it.
 - [ ] **3p.50** `F` shows whether the guest's firewall is on and its rules (disabled ones dimmed, j/k scroll); `f` or Enter asks y/n (turning it on carries a red warning) and then `pvesh set .../firewall/options --enable` switches it.
 - [ ] **3p.51** `i` on a storage lists everything on it biggest first, with used/total and a total per kind (iso, vztmpl, images, backup...); `d` asks y/n (a red warning, a second one for a guest disk) and then `pvesm free` deletes the volume under the cursor.
+- [ ] **3p.52** `w` in a task log (Tasks, Enter) or a guest's journal (`l` in the graph screen) writes every line to a new `~/yagura-<label>-<secs>.log` and says where (in the log's title, or the status line); a second `w` in the same second does not overwrite.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

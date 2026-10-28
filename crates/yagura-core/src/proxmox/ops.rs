@@ -343,6 +343,23 @@ pub fn content_totals(list: &[Vol]) -> Vec<(String, u64, usize)> {
     out
 }
 
+/// The file name for a saved log: `yagura-<label>-<secs>.log`, the label cut down to letters, digits and `-`.
+pub fn export_name(label: &str, secs: u64) -> String {
+    let l: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    format!("yagura-{}-{secs}.log", l.trim_matches('-'))
+}
+
+/// Write `lines` to a new file in `dir` (never over an existing one); returns the path.
+pub fn export_lines(dir: &std::path::Path, label: &str, secs: u64, lines: &[String]) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    let path = dir.join(export_name(label, secs));
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+    for l in lines {
+        writeln!(f, "{l}")?;
+    }
+    Ok(path)
+}
+
 /// Delete a volume (`pvesm free`; Proxmox refuses a protected backup and a disk that is in use).
 pub fn vol_delete_cmd(v: &Vol) -> Cmd {
     Cmd::new("pvesm", &["free", &v.volid])
@@ -700,6 +717,20 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_log_is_saved_to_a_new_file() {
+        assert_eq!(export_name("qmstart 100 on pve", 42), "yagura-qmstart-100-on-pve-42.log");
+        assert_eq!(export_name("../x", 1), "yagura-x-1.log");
+        let dir = std::env::temp_dir().join(format!("yagura-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lines = vec!["a".to_string(), "b".to_string()];
+        let p = export_lines(&dir, "t", 7, &lines).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "a\nb\n");
+        // The same name again is refused, not overwritten.
+        assert!(export_lines(&dir, "t", 7, &lines).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn storage_contents_are_totalled_and_freed() {
