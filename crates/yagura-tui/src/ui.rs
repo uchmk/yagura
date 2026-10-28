@@ -381,8 +381,30 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 }
             }
             l.push(Line::raw(""));
-            l.push(Line::styled("j/k move  Enter on/off (asks first)  Esc close", DIM));
+            l.push(Line::styled("j/k move  Enter on/off  n new  c change  d delete (each asks first)  Esc close", DIM));
             (" backup jobs ".to_string(), l)
+        }
+        Dialog::JobEdit { id, step, vals, err } => {
+            const NAMES: [&str; 4] = ["storage", "schedule", "guests", "mode"];
+            const HINTS: [&str; 4] = [
+                "the storage the backups go to (local, nas-1...)",
+                "when it runs: 21:00, daily, mon..fri 02:30",
+                "all, or guest ids like 100,101",
+                "snapshot, suspend or stop",
+            ];
+            let mut l = vec![];
+            for (i, n) in NAMES.iter().enumerate() {
+                let cur = i == *step;
+                let st = if cur { Style::new().add_modifier(Modifier::BOLD) } else { DIM };
+                l.push(Line::styled(format!("  {n:<9} {}{}", vals[i], if cur { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled(HINTS[*step], DIM));
+            if !err.is_empty() {
+                l.push(Line::styled(err.clone(), RED));
+            }
+            l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
+            (format!(" {} ", id.as_ref().map_or("new backup job".to_string(), |i| format!("backup job {i}"))), l)
         }
         Dialog::Content { storage, fill, list, sel, .. } => {
             let mut l = vec![];
@@ -1809,6 +1831,19 @@ mod tests {
         a.dialog = Some(Dialog::Text { title: "ZFS and Ceph".into(), lines: Some(lines), top: 0 });
         let s = text(&render(&a));
         assert!(s.contains("ZFS and Ceph") && s.contains("DEGRADED") && s.contains("read only"), "{s}");
+    }
+
+    #[test]
+    fn the_job_form_draws() {
+        let mut a = app(View::Host);
+        let vals = ["nas", "21:00", "all", "snapshot"].map(String::from);
+        a.dialog = Some(Dialog::JobEdit { id: None, step: 1, vals: vals.clone(), err: String::new() });
+        let s = text(&render(&a));
+        assert!(s.contains("new backup job") && s.contains("storage") && s.contains("21:00_") && s.contains("when it runs"), "{s}");
+        a.dialog =
+            Some(Dialog::JobEdit { id: Some("backup-1".into()), step: 3, vals, err: "the mode is snapshot, suspend or stop".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("backup job backup-1") && s.contains("snapshot_") && s.contains("the mode is"), "{s}");
     }
 
     #[test]

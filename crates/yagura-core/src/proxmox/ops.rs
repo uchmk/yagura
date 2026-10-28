@@ -405,6 +405,47 @@ pub fn backup_job_cmd(id: &str, on: bool) -> Cmd {
     Cmd::new("pvesh", &["set", &format!("/cluster/backup/{id}"), "--enabled", if on { "1" } else { "0" }])
 }
 
+/// `pvesh delete /cluster/backup/<id>`.
+pub fn backup_job_delete_cmd(id: &str) -> Cmd {
+    Cmd::new("pvesh", &["delete", &format!("/cluster/backup/{id}")])
+}
+
+/// The call that creates a backup job (`id` is `None`) or changes one, from the four fields `[storage, schedule, scope, mode]`.
+/// The scope is `all` or guest ids like `100,101`; a pool scope (`pool x`, kept as it is) is accepted only when editing.
+pub fn backup_job_save_cmd(id: Option<&str>, fields: &[String; 4]) -> Result<Cmd, String> {
+    let [storage, schedule, scope, mode] = fields.each_ref().map(|s| s.trim());
+    if storage.is_empty() || !storage.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+        return Err("the storage is a name like local or nas-1".into());
+    }
+    if schedule.is_empty() || schedule.starts_with('-') || schedule.chars().any(char::is_control) {
+        return Err("the schedule is like 21:00, daily or mon..fri 02:30".into());
+    }
+    if !["snapshot", "suspend", "stop"].contains(&mode) {
+        return Err("the mode is snapshot, suspend or stop".into());
+    }
+    let ids = !scope.is_empty() && scope.split(',').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    let mut a: Vec<String> = match id {
+        Some(id) => vec!["set".into(), format!("/cluster/backup/{id}")],
+        None => vec!["create".into(), "/cluster/backup".into()],
+    };
+    for (k, v) in [("--storage", storage), ("--schedule", schedule), ("--mode", mode)] {
+        a.push(k.into());
+        a.push(v.into());
+    }
+    let pool = id.is_some() && scope.starts_with("pool ");
+    let more: &[&str] = match (scope, ids) {
+        ("all", _) if id.is_some() => &["--all", "1", "--delete", "vmid,pool"],
+        ("all", _) => &["--all", "1"],
+        (_, true) if id.is_some() => &["--all", "0", "--vmid", scope],
+        (_, true) => &["--vmid", scope],
+        _ if pool => &[],
+        _ => return Err("the scope is all, or guest ids like 100,101".into()),
+    };
+    a.extend(more.iter().map(|s| s.to_string()));
+    let args: Vec<&str> = a.iter().map(String::as_str).collect();
+    Ok(Cmd::new("pvesh", &args))
+}
+
 /// One HA-managed guest (`Datacenter > HA`): what is asked for and what the manager reports.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HaRes {
@@ -995,6 +1036,36 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_jobs_are_built_for_create_edit_and_delete() {
+        let f = |a: &str, b: &str, c: &str, d: &str| [a, b, c, d].map(String::from);
+        let c = backup_job_save_cmd(None, &f("nas", "21:00", "all", "snapshot")).unwrap();
+        assert_eq!(c.args, ["create", "/cluster/backup", "--storage", "nas", "--schedule", "21:00", "--mode", "snapshot", "--all", "1"]);
+        let c = backup_job_save_cmd(None, &f(" nas ", "mon..fri 02:30", "100,101", "stop")).unwrap();
+        assert_eq!(&c.args[6..], ["--mode", "stop", "--vmid", "100,101"]);
+        let c = backup_job_save_cmd(Some("backup-1"), &f("nas", "daily", "all", "suspend")).unwrap();
+        assert_eq!(&c.args[..2], ["set", "/cluster/backup/backup-1"]);
+        assert_eq!(&c.args[8..], ["--all", "1", "--delete", "vmid,pool"]);
+        let c = backup_job_save_cmd(Some("backup-1"), &f("nas", "daily", "7", "stop")).unwrap();
+        assert_eq!(&c.args[8..], ["--all", "0", "--vmid", "7"]);
+        // A pool scope is kept when editing and refused when creating.
+        let c = backup_job_save_cmd(Some("backup-1"), &f("nas", "daily", "pool x", "stop")).unwrap();
+        assert_eq!(c.args.len(), 8);
+        assert!(backup_job_save_cmd(None, &f("nas", "daily", "pool x", "stop")).is_err());
+        for bad in [
+            f("", "daily", "all", "stop"),
+            f("a b", "daily", "all", "stop"),
+            f("nas", "", "all", "stop"),
+            f("nas", "-x", "all", "stop"),
+            f("nas", "daily", "all", "full"),
+            f("nas", "daily", "1,,2", "stop"),
+            f("nas", "daily", "", "stop"),
+        ] {
+            assert!(backup_job_save_cmd(None, &bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(backup_job_delete_cmd("backup-1").args, ["delete", "/cluster/backup/backup-1"]);
+    }
 
     #[test]
     fn pools_show_zfs_and_ceph_health() {

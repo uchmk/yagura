@@ -146,6 +146,14 @@ pub enum Dialog {
         list: Option<Vec<ops::BackupJob>>,
         sel: usize,
     },
+    /// Making a backup job (`id` is `None`) or changing one: the fields storage, schedule, scope and mode, the one being typed,
+    /// and what was wrong with the last try.
+    JobEdit {
+        id: Option<String>,
+        step: usize,
+        vals: [String; 4],
+        err: String,
+    },
     /// Everything on a storage (`None` while it is read), the cursor, and how full the storage is (used, total).
     Content {
         node: String,
@@ -481,6 +489,28 @@ pub fn sure_job(j: &ops::BackupJob) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label: format!("job {}", j.id), cmds: vec![ops::backup_job_cmd(&j.id, on)] }, lines }
 }
 
+/// The last question for deleting a backup job.
+pub fn sure_job_delete(j: &ops::BackupJob) -> Sure {
+    let lines = vec![
+        (format!("delete the backup job {} ({} on {}, {})", j.id, j.scope, j.storage, j.schedule), false),
+        ("the guests it covers are no longer backed up by it; the backups it made stay on the storage".into(), true),
+    ];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("delete job {}", j.id), cmds: vec![ops::backup_job_delete_cmd(&j.id)] }, lines }
+}
+
+/// The last question for making a backup job, or changing one.
+pub fn sure_job_save(id: Option<&str>, vals: &[String; 4], cmd: ops::Cmd) -> Sure {
+    let what = format!("{} on {}, {}, {}", vals[2].trim(), vals[0].trim(), vals[1].trim(), vals[3].trim());
+    let lines = vec![(
+        match id {
+            Some(id) => format!("change the backup job {id} to {what}"),
+            None => format!("make a backup job: {what}"),
+        },
+        false,
+    )];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("job {}", id.unwrap_or("new")), cmds: vec![cmd] }, lines }
+}
+
 /// The last question for deleting one volume of a storage.
 pub fn sure_vol(v: &ops::Vol) -> Sure {
     let mut lines = vec![(format!("delete {} ({}, {})", v.volid, v.content, bytes(v.size)), false)];
@@ -771,6 +801,21 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 KeyCode::Esc | KeyCode::Char('q') => return (None, Next::Nothing),
                 KeyCode::Char('j') | KeyCode::Down => sel = (sel + 1).min(n.saturating_sub(1)),
                 KeyCode::Char('k') | KeyCode::Up => sel = sel.saturating_sub(1),
+                KeyCode::Char('n') => {
+                    let vals = ["", "21:00", "all", "snapshot"].map(String::from);
+                    return (Some(Dialog::JobEdit { id: None, step: 0, vals, err: String::new() }), Next::Nothing);
+                }
+                KeyCode::Char('c') => {
+                    if let Some(j) = list.as_ref().and_then(|l| l.get(sel)) {
+                        let vals = [j.storage.clone(), j.schedule.clone(), j.scope.clone(), j.mode.clone()];
+                        return (Some(Dialog::JobEdit { id: Some(j.id.clone()), step: 0, vals, err: String::new() }), Next::Nothing);
+                    }
+                }
+                KeyCode::Char('d') => {
+                    if let Some(j) = list.as_ref().and_then(|l| l.get(sel)) {
+                        return (Some(Dialog::Sure(sure_job_delete(j))), Next::Nothing);
+                    }
+                }
                 KeyCode::Enter | KeyCode::Char('e') => {
                     if let Some(j) = list.as_ref().and_then(|l| l.get(sel)) {
                         return (Some(Dialog::Sure(sure_job(j))), Next::Nothing);
@@ -779,6 +824,33 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => {}
             }
             (Some(Dialog::Jobs { list, sel }), Next::Nothing)
+        }
+        Dialog::JobEdit { id, mut step, mut vals, mut err } => {
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Char(c) if !c.is_control() && vals[step].chars().count() < 80 => vals[step].push(c),
+                KeyCode::Backspace => {
+                    if vals[step].is_empty() && step > 0 {
+                        step -= 1;
+                    } else {
+                        vals[step].pop();
+                    }
+                }
+                KeyCode::Enter if step < 3 => {
+                    if vals[step].trim().is_empty() {
+                        err = "this field cannot be empty".into();
+                    } else {
+                        step += 1;
+                        err.clear();
+                    }
+                }
+                KeyCode::Enter => match ops::backup_job_save_cmd(id.as_deref(), &vals) {
+                    Ok(cmd) => return (Some(Dialog::Sure(sure_job_save(id.as_deref(), &vals, cmd))), Next::Nothing),
+                    Err(e) => err = e,
+                },
+                _ => {}
+            }
+            (Some(Dialog::JobEdit { id, step, vals, err }), Next::Nothing)
         }
         Dialog::Content { node, storage, fill, list, mut sel } => {
             let n = list.as_ref().map_or(0, Vec::len);
@@ -1147,6 +1219,65 @@ mod tests {
         assert_eq!(s.op, Op::Cmds { label: "note 100 s1".into(), cmds: vec![want] });
         // Esc leaves the guest and the note alone.
         let (d, _) = key(Dialog::SnapNote { t, snap: "s1".into(), text: "x".into() }, KeyCode::Esc, none);
+        assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_job_form_makes_changes_and_deletes_jobs() {
+        let none = |_: &Target| None;
+        let job = ops::BackupJob {
+            id: "backup-1".into(),
+            enabled: true,
+            schedule: "daily".into(),
+            storage: "nas".into(),
+            scope: "all".into(),
+            mode: "snapshot".into(),
+            node: String::new(),
+            next_run: None,
+        };
+        let jobs = || Dialog::Jobs { list: Some(vec![job.clone()]), sel: 0 };
+        // `n` starts a new job with the defaults; an empty storage is refused, then the four steps lead to a question.
+        let (d, _) = key(jobs(), KeyCode::Char('n'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::JobEdit { step: 0, ref err, .. }) = d else { panic!("moved on with no storage") };
+        assert!(!err.is_empty());
+        let mut d = d;
+        for c in "nas".chars() {
+            d = key(d.unwrap(), KeyCode::Char(c), none).0;
+        }
+        for _ in 0..3 {
+            d = key(d.unwrap(), KeyCode::Enter, none).0;
+        }
+        let Some(Dialog::JobEdit { step: 3, .. }) = d else { panic!("not on the last step") };
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        let fields = ["nas", "21:00", "all", "snapshot"].map(String::from);
+        assert_eq!(s.op, Op::Cmds { label: "job new".into(), cmds: vec![ops::backup_job_save_cmd(None, &fields).unwrap()] });
+        // A wrong mode is told, and Backspace on an empty field goes back a step.
+        let (d, _) = key(
+            Dialog::JobEdit { id: None, step: 3, vals: ["nas", "daily", "all", "full"].map(String::from), err: String::new() },
+            KeyCode::Enter,
+            none,
+        );
+        let Some(Dialog::JobEdit { err, .. }) = d else { panic!("accepted a wrong mode") };
+        assert!(err.contains("mode"));
+        let (d, _) = key(
+            Dialog::JobEdit { id: None, step: 2, vals: ["a", "b", "", "d"].map(String::from), err: String::new() },
+            KeyCode::Backspace,
+            none,
+        );
+        assert!(matches!(d, Some(Dialog::JobEdit { step: 1, .. })));
+        // `c` edits the job under the cursor with its own values.
+        let (d, _) = key(jobs(), KeyCode::Char('c'), none);
+        let Some(Dialog::JobEdit { id: Some(id), vals, .. }) = d else { panic!("no form") };
+        assert_eq!((id.as_str(), vals[0].as_str(), vals[1].as_str()), ("backup-1", "nas", "daily"));
+        // `d` asks before deleting, with a red line.
+        let (d, _) = key(jobs(), KeyCode::Char('d'), none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(s.op, Op::Cmds { label: "delete job backup-1".into(), cmds: vec![ops::backup_job_delete_cmd("backup-1")] });
+        assert!(s.lines.iter().any(|l| l.1));
+        // Esc leaves the form.
+        let (d, _) = key(Dialog::JobEdit { id: None, step: 0, vals: Default::default(), err: String::new() }, KeyCode::Esc, none);
         assert!(d.is_none());
     }
 
