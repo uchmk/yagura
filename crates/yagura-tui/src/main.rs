@@ -127,6 +127,7 @@ enum Job {
     Backups(String, String, Vec<proxmox::ops::Backup>),
     /// A free guest id for restoring this backup.
     RestoreId(proxmox::ops::Backup, Option<u32>),
+    CloneId(dialog::Target, String, bool, Option<u32>),
 }
 
 fn main() -> std::io::Result<()> {
@@ -136,7 +137,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -289,6 +290,13 @@ fn run(
                     }
                     None => app.status = "restore: no free guest id, or this file is not a guest backup".into(),
                 },
+                Job::CloneId(t, name, full, id) => match id {
+                    Some(id) => {
+                        app.status.clear();
+                        app.dialog = Some(dialog::Dialog::Sure(dialog::sure_clone(&t, &name, full, id)));
+                    }
+                    None => app.status = "clone: no free guest id".into(),
+                },
                 Job::Cleanup(items) => {
                     app.cleaning = false;
                     let c = config::get();
@@ -427,6 +435,8 @@ fn run(
             KeyCode::Char('e') if app.view == View::Guests => open_edit(app),
             KeyCode::Char('z') if matches!(app.view, View::Guests | View::Graph(_)) => open_resize(app, jobs_tx),
             KeyCode::Char('n') if app.view == View::Guests => open_node(app),
+            KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
+            KeyCode::Char('D') if matches!(app.view, View::Guests | View::Graph(_)) => open_destroy(app),
             KeyCode::Char('t') if matches!(app.view, View::Guests | View::Graph(_)) => open_console(app),
             KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
             KeyCode::Char(' ') if app.view == View::Guests => {
@@ -509,6 +519,27 @@ fn snap_free(m: &Model, t: &dialog::Target) -> Option<(String, u64)> {
         .filter(|s| s.node == t.node && s.active && s.total > 0 && s.content.split(',').any(|c| c == "images" || c == "rootdir"))
         .map(|s| (s.name.clone(), s.total.saturating_sub(s.used)))
         .min_by_key(|x| x.1)
+}
+
+/// `Y`: ask for the name of a copy of the guest.
+fn open_clone(app: &mut App) {
+    let Some(t) = target(app) else { return };
+    app.status.clear();
+    let name = format!("{}-clone", t.name);
+    let name = if proxmox::ops::valid_guest_name(&name) { name } else { format!("clone-{}", t.id) };
+    app.dialog = Some(dialog::Dialog::Clone { t, name, full: true });
+}
+
+/// `D`: delete the guest under the cursor, if it is stopped.
+fn open_destroy(app: &mut App) {
+    let Some(t) = target(app) else { return };
+    let running = app.model.cluster.guests.iter().any(|g| g.id == t.id && g.status != proxmox::Status::Stopped);
+    if running {
+        app.status = format!("{}: stop the guest before deleting it", t.id);
+        return;
+    }
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Sure(dialog::sure_destroy(&t)));
 }
 
 /// `S`: ask for a snapshot name.
@@ -775,6 +806,17 @@ fn dialog_key(app: &mut App, code: KeyCode, tx: &Sender<Job>) {
             .name("yagura-nextid".into())
             .spawn(move || {
                 let _ = tx.send(Job::RestoreId(b, proxmox::ops::next_id()));
+            })
+            .expect("spawn the next id thread");
+        return;
+    }
+    if let dialog::Next::CloneId(t, name, full) = run {
+        app.status = "clone: looking for a free guest id...".into();
+        let tx = tx.clone();
+        std::thread::Builder::new()
+            .name("yagura-nextid".into())
+            .spawn(move || {
+                let _ = tx.send(Job::CloneId(t, name, full, proxmox::ops::next_id()));
             })
             .expect("spawn the next id thread");
         return;

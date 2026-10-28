@@ -341,6 +341,30 @@ pub fn config(node: &str, kind: Kind, id: u32) -> Option<Vec<(String, String)>> 
     pvesh(&format!("/nodes/{node}/{what}/{id}/config"), &[]).map(|j| parse_config(&j)).filter(|c| !c.is_empty())
 }
 
+/// A name Proxmox takes for a new guest (a DNS-like name: letters, digits, `-` and `.`; starts with a letter or digit).
+pub fn valid_guest_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 63
+        && s.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+}
+
+/// `qm clone` / `pct clone`: a copy of guest `id` as `newid`. Only a template can be cloned linked (`full` false).
+pub fn clone_cmd(kind: Kind, id: u32, newid: u32, name: &str, full: bool) -> Cmd {
+    let (prog, name_opt) = if kind == Kind::Lxc { ("pct", "--hostname") } else { ("qm", "--name") };
+    let (id, newid) = (id.to_string(), newid.to_string());
+    let mut args = vec!["clone", id.as_str(), newid.as_str(), name_opt, name];
+    if full {
+        args.extend(["--full", "1"]);
+    }
+    Cmd::new(prog, &args)
+}
+
+/// `qm destroy` / `pct destroy`: remove a stopped guest and its disks (`--purge` also drops it from backup jobs and HA).
+pub fn destroy_cmd(kind: Kind, id: u32) -> Cmd {
+    Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["destroy", &id.to_string(), "--purge"])
+}
+
 /// What to do with a whole node.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NodeCmd {
@@ -476,6 +500,15 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clone_and_destroy_commands() {
+        assert_eq!(clone_cmd(Kind::Qemu, 100, 105, "web", true).args, ["clone", "100", "105", "--name", "web", "--full", "1"]);
+        assert_eq!(clone_cmd(Kind::Lxc, 101, 106, "ct", false), Cmd::new("pct", &["clone", "101", "106", "--hostname", "ct"]));
+        assert_eq!(destroy_cmd(Kind::Qemu, 100).args, ["destroy", "100", "--purge"]);
+        assert_eq!(destroy_cmd(Kind::Lxc, 101).prog, "pct");
+        assert!(valid_guest_name("web-1.lan") && !valid_guest_name("") && !valid_guest_name("-x") && !valid_guest_name("a b"));
+    }
 
     #[test]
     fn node_commands_go_through_pvesh() {

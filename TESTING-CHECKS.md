@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-277 rows to press (277 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+279 rows to press (279 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -293,6 +293,8 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.43** The `e` form has four fields (memory, cores, swap, cpu limit; Tab cycles); a container takes swap, a VM ignores it, cpu limit 0 removes the limit; the config view (`c`) shows the new values.
 - [ ] **3p.44** `z` in the guest list (or the graph screen) lists the guest's disks (no CD-ROM or cloud-init); j/k pick one, digits type GiB, Enter asks y/n and then `qm resize` / `pct resize` grows it; `c` shows the new size.
 - [ ] **3p.45** In the node menu `u` asks y/n and starts `apt update` on the node (a task shows in the Tasks screen); `R` / `X` ask y/n with the number of running guests in red and then reboot / shut the node down.
+- [ ] **3p.46** `Y` in the guest list (or the graph screen) asks for a name (default `<name>-clone`), Enter looks up a free id and asks y/n; then `qm clone` / `pct clone` makes a full copy (a template can be switched to a linked clone with Tab) and the new guest appears in the list.
+- [ ] **3p.47** `D` on a running guest says to stop it first; on a stopped guest it asks y/n with a red warning and then `qm destroy` / `pct destroy --purge` removes it with its disks.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

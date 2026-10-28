@@ -124,6 +124,12 @@ pub enum Dialog {
         list: Option<Vec<(String, String)>>,
         top: usize,
     },
+    /// A copy of a guest: the new name and whether the disks are copied (`full`) or linked (templates only).
+    Clone {
+        t: Target,
+        name: String,
+        full: bool,
+    },
     /// Grow a disk of a guest: its disks (`None` while the config is read), the cursor and the GiB typed.
     Resize {
         t: Target,
@@ -155,6 +161,8 @@ pub enum Next {
     Run(Target, Op),
     /// Restore this backup: the main loop looks up a free guest id first.
     Restore(Backup),
+    /// Clone this guest under this name (`full` or linked): the main loop looks up a free guest id first.
+    CloneId(Target, String, bool),
 }
 
 /// `YYYY-MM-DD HH:MM` (UTC) of a Unix time.
@@ -391,6 +399,26 @@ pub fn sure_maintenance(node: &str, on: bool) -> Sure {
     }
 }
 
+/// The last question for cloning `t` as guest `newid`.
+pub fn sure_clone(t: &Target, name: &str, full: bool, newid: u32) -> Sure {
+    let how = if full { "full copy of the disks" } else { "linked clone (shares the template's disks)" };
+    let mut lines = vec![(format!("clone {} {} as {newid} {name}: {how}", t.id, t.name), false)];
+    if full {
+        lines.push((format!("copies about {} of disk data", bytes(t.used)), false));
+    }
+    let label = format!("clone as {newid}");
+    Sure { t: Target::none(), op: Op::Cmds { label, cmds: vec![ops::clone_cmd(t.kind, t.id, newid, name, full)] }, lines }
+}
+
+/// The last question for deleting the (stopped) guest `t` with its disks.
+pub fn sure_destroy(t: &Target) -> Sure {
+    let lines = vec![
+        (format!("delete {} {} with all its disks", t.id, t.name), false),
+        ("the guest and its disks can not be brought back; backup files and snapshots of other guests stay".into(), true),
+    ];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("delete {}", t.id), cmds: vec![ops::destroy_cmd(t.kind, t.id)] }, lines }
+}
+
 /// The last question for rebooting or shutting down the node, or refreshing its package lists.
 pub fn sure_node(node: &str, c: ops::NodeCmd, running: usize) -> Sure {
     use ops::NodeCmd::*;
@@ -554,6 +582,24 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
             };
             (Some(Dialog::Config { t, list, top }), Next::Nothing)
         }
+        Dialog::Clone { t, mut name, mut full } => match code {
+            KeyCode::Esc => (None, Next::Nothing),
+            KeyCode::Char(c) if (c.is_ascii_alphanumeric() || c == '-' || c == '.') && name.len() < 63 => {
+                name.push(c);
+                (Some(Dialog::Clone { t, name, full }), Next::Nothing)
+            }
+            KeyCode::Backspace => {
+                name.pop();
+                (Some(Dialog::Clone { t, name, full }), Next::Nothing)
+            }
+            KeyCode::Tab => {
+                // A guest that is not a template can only be copied in full.
+                full = !full || !t.template;
+                (Some(Dialog::Clone { t, name, full }), Next::Nothing)
+            }
+            KeyCode::Enter if ops::valid_guest_name(&name) => (None, Next::CloneId(t, name, full)),
+            _ => (Some(Dialog::Clone { t, name, full }), Next::Nothing),
+        },
         Dialog::Resize { t, disks, sel, mut gib } => {
             let n = disks.as_ref().map_or(0, Vec::len);
             let stay = |t, disks, sel, gib| (Some(Dialog::Resize { t, disks, sel, gib }), Next::Nothing);
@@ -771,6 +817,38 @@ mod tests {
         assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
         assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_clone_dialog_names_the_copy_and_looks_for_an_id() {
+        let none = |_: &Target| None;
+        let mut t = target(Kind::Qemu);
+        let d = Dialog::Clone { t: t.clone(), name: "w".into(), full: true };
+        // A plain guest stays a full copy.
+        let (d, _) = key(d, KeyCode::Tab, none);
+        let Some(Dialog::Clone { full, .. }) = d.clone() else { panic!("closed") };
+        assert!(full);
+        let (d, next) = key(d.unwrap(), KeyCode::Char('1'), none);
+        assert!(matches!(next, Next::Nothing));
+        let (d, next) = key(d.unwrap(), KeyCode::Enter, none);
+        assert!(d.is_none());
+        assert!(matches!(next, Next::CloneId(_, ref n, true) if n == "w1"));
+        // A template can switch to a linked clone.
+        t.template = true;
+        let (d, _) = key(Dialog::Clone { t, name: "a".into(), full: true }, KeyCode::Tab, none);
+        assert!(matches!(d, Some(Dialog::Clone { full: false, .. })));
+        // An empty or bad name does not go on.
+        let (d, next) = key(Dialog::Clone { t: target(Kind::Lxc), name: String::new(), full: true }, KeyCode::Enter, none);
+        assert!(d.is_some() && matches!(next, Next::Nothing));
+    }
+
+    #[test]
+    fn the_clone_and_delete_questions_say_what_happens() {
+        let s = sure_clone(&target(Kind::Qemu), "web", false, 105);
+        assert_eq!(s.op, Op::Cmds { label: "clone as 105".into(), cmds: vec![ops::clone_cmd(Kind::Qemu, 101, 105, "web", false)] });
+        let s = sure_destroy(&target(Kind::Lxc));
+        assert_eq!(s.op, Op::Cmds { label: "delete 101".into(), cmds: vec![ops::destroy_cmd(Kind::Lxc, 101)] });
+        assert!(s.lines.iter().any(|l| l.1));
     }
 
     #[test]

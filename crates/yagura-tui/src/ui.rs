@@ -172,6 +172,21 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ];
             (" node ".to_string(), l)
         }
+        Dialog::Clone { t, name, full } => {
+            let ok = yagura_core::proxmox::ops::valid_guest_name(name);
+            let how = if *full { "full copy" } else { "linked clone" };
+            let tab = if t.template { "  Tab full / linked" } else { "" };
+            (
+                format!(" clone {} {} ", t.id, t.name),
+                vec![
+                    Line::raw("name of the copy (letters, digits, - and .):"),
+                    Line::styled(format!("  {name}_"), if ok { Style::new().add_modifier(Modifier::BOLD) } else { RED }),
+                    Line::raw(format!("  {how}")),
+                    Line::raw(""),
+                    Line::styled(format!("Enter next{tab}  Esc cancel"), DIM),
+                ],
+            )
+        }
         Dialog::Resize { t, disks, sel, gib } => {
             let mut l = vec![];
             match disks {
@@ -424,7 +439,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Storage: Enter backups",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D  clone / delete;  Storage: Enter backups",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1541,6 +1556,18 @@ mod tests {
         a.dialog = Some(Dialog::Edit(f));
         let s = text(&render(&a));
         assert!(s.contains("4096_") && s.contains("(keep)") && s.contains("101 web"), "{s}");
+    }
+
+    #[test]
+    fn the_clone_dialog_draws() {
+        use crate::dialog::Target;
+        let t = Target { id: 100, name: "tpl".into(), kind: Kind::Qemu, node: "pve".into(), maxmem: 0, used: 0, template: true };
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Clone { t: t.clone(), name: "web".into(), full: false });
+        let s = text(&render(&a));
+        assert!(s.contains("web_") && s.contains("linked clone") && s.contains("Tab full / linked"), "{s}");
+        a.dialog = Some(Dialog::Clone { t: Target { template: false, ..t }, name: "web".into(), full: true });
+        assert!(!text(&render(&a)).contains("Tab full"));
     }
 
     #[test]
