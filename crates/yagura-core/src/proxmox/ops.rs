@@ -1134,6 +1134,25 @@ pub fn valid_guest_name(s: &str) -> bool {
 }
 
 /// `qm clone` / `pct clone`: a copy of guest `id` as `newid`. Only a template can be cloned linked (`full` false).
+pub fn migrate_cmd(kind: Kind, id: u32, target: &str, running: bool, online: bool) -> Result<Cmd, String> {
+    if target.is_empty() || !target.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') {
+        return Err("the target node name is not valid".into());
+    }
+    let id = id.to_string();
+    let mut args = vec!["migrate", id.as_str(), target];
+    if running {
+        // A VM can move while it runs; a container is stopped and started again on the target.
+        args.extend(if kind == Kind::Lxc {
+            ["--restart", "1"]
+        } else if online {
+            ["--online", "1"]
+        } else {
+            ["--online", "0"]
+        });
+    }
+    Ok(Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &args))
+}
+
 pub fn clone_cmd(kind: Kind, id: u32, newid: u32, name: &str, full: bool) -> Cmd {
     let (prog, name_opt) = if kind == Kind::Lxc { ("pct", "--hostname") } else { ("qm", "--name") };
     let (id, newid) = (id.to_string(), newid.to_string());
@@ -1560,6 +1579,20 @@ mod tests {
         }
         assert_eq!(storage_remove_cmd("nas-1").args, ["delete", "/storage/nas-1"]);
         assert_eq!(storage_remove_cmd("a b").args, ["delete", "/storage/invalid"]);
+    }
+
+    #[test]
+    fn a_guest_moves_to_another_node() {
+        assert_eq!(migrate_cmd(Kind::Qemu, 100, "pve2", true, true).unwrap().args, ["migrate", "100", "pve2", "--online", "1"]);
+        assert_eq!(migrate_cmd(Kind::Qemu, 100, "pve2", true, false).unwrap().args, ["migrate", "100", "pve2", "--online", "0"]);
+        assert_eq!(migrate_cmd(Kind::Qemu, 100, "pve2", false, true).unwrap().args, ["migrate", "100", "pve2"]);
+        let c = migrate_cmd(Kind::Lxc, 101, "pve2", true, true).unwrap();
+        assert_eq!(
+            (c.prog.as_str(), c.args),
+            ("pct", vec!["migrate".to_string(), "101".into(), "pve2".into(), "--restart".into(), "1".into()])
+        );
+        assert!(migrate_cmd(Kind::Qemu, 100, "", true, true).is_err());
+        assert!(migrate_cmd(Kind::Qemu, 100, "a;b", true, true).is_err());
     }
 
     #[test]

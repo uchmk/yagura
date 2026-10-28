@@ -148,7 +148,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  N (host) network interfaces  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  M migrate  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  N (host) network interfaces  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -523,6 +523,7 @@ fn run(
             KeyCode::Char('z') if matches!(app.view, View::Guests | View::Graph(_)) => open_resize(app, jobs_tx),
             KeyCode::Char('n') if app.view == View::Guests => open_node(app),
             KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
+            KeyCode::Char('M') if matches!(app.view, View::Guests | View::Graph(_)) => open_migrate(app),
             KeyCode::Char('D') if matches!(app.view, View::Guests | View::Graph(_)) => open_destroy(app),
             KeyCode::Char('T') if matches!(app.view, View::Guests | View::Graph(_)) => open_template(app),
             KeyCode::Char('H') if matches!(app.view, View::Host | View::Guests | View::Graph(_)) => cycle_span(app),
@@ -650,6 +651,23 @@ fn open_clone(app: &mut App) {
     // A template is cloned linked at first: it is quick and shares the template's disks.
     let full = !t.template;
     app.dialog = Some(dialog::Dialog::Clone { t, name, full });
+}
+
+/// `M`: move the guest under the cursor to another online node of the cluster.
+fn open_migrate(app: &mut App) {
+    let Some(t) = target(app) else { return };
+    if t.template {
+        app.status = format!("{}: a template is cloned (Y), not moved", t.id);
+        return;
+    }
+    let nodes: Vec<String> = app.model.cluster.nodes.iter().filter(|n| n.online && n.name != t.node).map(|n| n.name.clone()).collect();
+    if nodes.is_empty() {
+        app.status = format!("{}: there is no other online node to move it to", t.id);
+        return;
+    }
+    let running = app.model.cluster.guests.iter().any(|g| g.id == t.id && g.status != proxmox::Status::Stopped);
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Migrate { t, nodes, sel: 0, running, online: true });
 }
 
 /// `D`: delete the guest under the cursor, if it is stopped.

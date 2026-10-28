@@ -365,6 +365,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.69 | `L` in the host screen shows the cluster and node firewall: on or off (OFF in red), the default policies and the rules in order, disabled rules marked off. |
 | 3p.70 | In the Storage screen, `n` walks through name, server, export and content and asks y/n before `pvesh create /storage --type nfs`; a bad name, path or content is refused with a reason. `X` asks y/n before `pvesh delete /storage/<name>`, with a red warning when the storage holds guest disks. |
 | 3p.71 | `N` in the host screen lists the node's network interfaces with address, gateway, ports/slaves, VLAN and comment; an interface that should start but is not active reads DOWN in red. |
+| 3p.72 | `M` on a guest picks another online node; a running VM moves live (Tab switches to offline), a container restarts on the target. Moves that stop the guest show a red warning, and y/n is asked last. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

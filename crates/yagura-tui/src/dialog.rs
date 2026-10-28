@@ -205,6 +205,14 @@ pub enum Dialog {
         name: String,
         full: bool,
     },
+    /// Move a guest to another node: the other nodes, the cursor, whether the guest runs and whether a running VM moves live.
+    Migrate {
+        t: Target,
+        nodes: Vec<String>,
+        sel: usize,
+        running: bool,
+        online: bool,
+    },
     /// Grow a disk of a guest: its disks (`None` while the config is read), the cursor and the GiB typed.
     Resize {
         t: Target,
@@ -656,6 +664,22 @@ pub fn sure_clone(t: &Target, name: &str, full: bool, newid: u32) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label, cmds: vec![ops::clone_cmd(t.kind, t.id, newid, name, full)] }, lines }
 }
 
+/// The last question for moving the guest `t` to the node `to`.
+pub fn sure_migrate(t: &Target, to: &str, running: bool, online: bool, cmd: ops::Cmd) -> Sure {
+    let how = match (running, t.kind, online) {
+        (false, _, _) => "the guest is stopped, so only its disks and settings move",
+        (true, Kind::Lxc, _) => "the container is stopped, moved and started again on the target",
+        (true, _, true) => "the VM keeps running and moves live",
+        (true, _, false) => "the VM is shut down for the move",
+    };
+    let mut lines = vec![(format!("move {} {} from {} to {to}: {how}", t.id, t.name, t.node), false)];
+    if running && (t.kind == Kind::Lxc || !online) {
+        lines.push(("the guest is down while it moves".into(), true));
+    }
+    lines.push(("it fails if a disk lives on storage that only this node has".into(), false));
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("migrate {} to {to}", t.id), cmds: vec![cmd] }, lines }
+}
+
 /// The last question for turning the (stopped) guest `t` into a template.
 pub fn sure_template(t: &Target) -> Sure {
     let lines = vec![
@@ -1098,6 +1122,21 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
             KeyCode::Enter if ops::valid_guest_name(&name) => (None, Next::CloneId(t, name, full)),
             _ => (Some(Dialog::Clone { t, name, full }), Next::Nothing),
         },
+        Dialog::Migrate { t, nodes, mut sel, running, mut online } => {
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Char('j') | KeyCode::Down => sel = (sel + 1).min(nodes.len().saturating_sub(1)),
+                KeyCode::Char('k') | KeyCode::Up => sel = sel.saturating_sub(1),
+                KeyCode::Tab if t.kind == Kind::Qemu => online = !online,
+                KeyCode::Enter => {
+                    if let Some((n, Ok(cmd))) = nodes.get(sel).map(|n| (n, ops::migrate_cmd(t.kind, t.id, n, running, online))) {
+                        return (Some(Dialog::Sure(sure_migrate(&t, n, running, online, cmd))), Next::Nothing);
+                    }
+                }
+                _ => {}
+            }
+            (Some(Dialog::Migrate { t, nodes, sel, running, online }), Next::Nothing)
+        }
         Dialog::Resize { t, disks, sel, mut gib } => {
             let n = disks.as_ref().map_or(0, Vec::len);
             let stay = |t, disks, sel, gib| (Some(Dialog::Resize { t, disks, sel, gib }), Next::Nothing);
@@ -1654,6 +1693,27 @@ mod tests {
         // An empty or bad name does not go on.
         let (d, next) = key(Dialog::Clone { t: target(Kind::Lxc), name: String::new(), full: true }, KeyCode::Enter, none);
         assert!(d.is_some() && matches!(next, Next::Nothing));
+    }
+
+    #[test]
+    fn the_migrate_dialog_picks_a_node_and_asks() {
+        let none = |_: &Target| None;
+        let t = target(Kind::Qemu);
+        let nodes = vec!["pve2".to_string(), "pve3".to_string()];
+        let d = Dialog::Migrate { t: t.clone(), nodes: nodes.clone(), sel: 0, running: true, online: true };
+        let (d, _) = key(d, KeyCode::Char('j'), none);
+        let (d, _) = key(d.unwrap(), KeyCode::Tab, none);
+        let (d, _) = key(d.unwrap(), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds[0].args == ["migrate", "101", "pve3", "--online", "0"]));
+        assert!(s.lines.iter().any(|(l, red)| *red && l.contains("down")), "{:?}", s.lines);
+        // A live move of a VM needs no warning; a container always restarts.
+        let (d, _) = key(Dialog::Migrate { t, nodes: nodes.clone(), sel: 0, running: true, online: true }, KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(s.lines.iter().all(|(_, red)| !red));
+        let l = target(Kind::Lxc);
+        let (d, _) = key(Dialog::Migrate { t: l, nodes, sel: 0, running: true, online: true }, KeyCode::Tab, none);
+        let Some(Dialog::Migrate { online: true, .. }) = d else { panic!("Tab changed a container") };
     }
 
     #[test]

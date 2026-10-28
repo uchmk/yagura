@@ -333,6 +333,27 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 ],
             )
         }
+        Dialog::Migrate { t, nodes, sel, running, online } => {
+            let mut l = vec![Line::raw("move to node:")];
+            for (i, n) in nodes.iter().enumerate() {
+                let st = if i == *sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+                l.push(Line::styled(format!("  {n}"), st));
+            }
+            if nodes.is_empty() {
+                l.push(Line::styled("no other online node", DIM));
+            }
+            l.push(Line::raw(""));
+            let how = match (*running, t.kind, *online) {
+                (false, _, _) => "stopped: disks and settings move",
+                (true, Kind::Lxc, _) => "running: restarted on the target",
+                (true, _, true) => "running: live migration",
+                (true, _, false) => "running: shut down for the move",
+            };
+            l.push(Line::raw(how));
+            let tab = if *running && t.kind == Kind::Qemu { "  Tab live / offline" } else { "" };
+            l.push(Line::styled(format!("j/k choose  Enter next{tab}  Esc cancel"), DIM));
+            (format!(" migrate {} {} from {} ", t.id, t.name, t.node), l)
+        }
         Dialog::Resize { t, disks, sel, gib } => {
             let mut l = vec![];
             match disks {
@@ -728,7 +749,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x  f    clean up old snapshots and backups / stop a task (Tasks) (asks first) / step the Tasks filter (failed, running, 24 h, 7 d)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART, N network;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F M  clone / delete / template / network / firewall / migrate;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, L cluster and node firewall, U package updates, V refresh them, K certificates, D disks and SMART, N network;  Storage: Enter backups, i contents, J backup jobs, n add an NFS storage, X remove one (asks first)",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -2141,6 +2162,19 @@ mod tests {
         a.dialog = Some(d(Some(vec![("net0".into(), "virtio=BC:24:11:00:00:01,bridge=vmbr0,tag=10".into())])));
         let s = text(&render(&a));
         assert!(s.contains("net0") && s.contains("bridge  vmbr0") && s.contains("VLAN    10_") && s.contains("BC:24:11:00:00:01"), "{s}");
+    }
+
+    #[test]
+    fn the_migrate_dialog_draws() {
+        let mut a = app(View::Guests);
+        let mut t = crate::dialog::Target::of(&a.model.cluster.guests[0]);
+        t.kind = crate::proxmox::Kind::Qemu;
+        a.dialog = Some(Dialog::Migrate { t, nodes: vec!["pve2".into()], sel: 0, running: true, online: true });
+        let s = text(&render(&a));
+        assert!(
+            s.contains("move to node") && s.contains("pve2") && s.contains("live migration") && s.contains("Tab live / offline"),
+            "{s}"
+        );
     }
 
     #[test]
