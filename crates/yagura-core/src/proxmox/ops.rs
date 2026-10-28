@@ -341,6 +341,24 @@ pub fn config(node: &str, kind: Kind, id: u32) -> Option<Vec<(String, String)>> 
     pvesh(&format!("/nodes/{node}/{what}/{id}/config"), &[]).map(|j| parse_config(&j)).filter(|c| !c.is_empty())
 }
 
+/// What to do with a whole node.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NodeCmd {
+    Reboot,
+    Shutdown,
+    /// Refresh the package lists (`apt update`); installs nothing.
+    AptUpdate,
+}
+
+/// The `pvesh` call for a node (works for any node of the cluster, a task or a command to its status).
+pub fn node_cmd(node: &str, c: NodeCmd) -> Cmd {
+    match c {
+        NodeCmd::Reboot => Cmd::new("pvesh", &["create", &format!("/nodes/{node}/status"), "--command", "reboot"]),
+        NodeCmd::Shutdown => Cmd::new("pvesh", &["create", &format!("/nodes/{node}/status"), "--command", "shutdown"]),
+        NodeCmd::AptUpdate => Cmd::new("pvesh", &["create", &format!("/nodes/{node}/apt/update")]),
+    }
+}
+
 /// The disks in a guest's configuration as (key, value), e.g. `("scsi0", "local-lvm:vm-100-disk-0,size=32G")`.
 /// CD-ROMs and cloud-init drives are left out; a container's `rootfs` and `mpN` count.
 pub fn disks(kind: Kind, cfg: &[(String, String)]) -> Vec<(String, String)> {
@@ -458,6 +476,13 @@ fn run(prog: &str, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_commands_go_through_pvesh() {
+        assert_eq!(node_cmd("pve", NodeCmd::Reboot).args, ["create", "/nodes/pve/status", "--command", "reboot"]);
+        assert_eq!(node_cmd("pve", NodeCmd::AptUpdate).args, ["create", "/nodes/pve/apt/update"]);
+        assert_eq!(node_cmd("b", NodeCmd::Shutdown).prog, "pvesh");
+    }
 
     #[test]
     fn disks_are_picked_from_the_config_and_grown() {

@@ -391,6 +391,24 @@ pub fn sure_maintenance(node: &str, on: bool) -> Sure {
     }
 }
 
+/// The last question for rebooting or shutting down the node, or refreshing its package lists.
+pub fn sure_node(node: &str, c: ops::NodeCmd, running: usize) -> Sure {
+    use ops::NodeCmd::*;
+    let (what, label) = match c {
+        Reboot => ("reboot", "reboot node"),
+        Shutdown => ("shut down", "shut down node"),
+        AptUpdate => ("refresh the package lists (apt update) of", "apt update"),
+    };
+    let mut lines = vec![(format!("{what} node {node}"), false)];
+    if c != AptUpdate {
+        lines.push((
+            format!("{running} running guests stop with it (HA guests move or restart); a shutdown needs power or IPMI to start again"),
+            true,
+        ));
+    }
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("{label} {node}"), cmds: vec![ops::node_cmd(node, c)] }, lines }
+}
+
 /// The last question for starting or shutting down every guest in `list`, one after the other; `None` for an empty list.
 pub fn sure_all(node: &str, list: &[Target], start: bool) -> Option<Sure> {
     if list.is_empty() {
@@ -565,6 +583,9 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 KeyCode::Char('M') => Some(sure_maintenance(&node, false)),
                 KeyCode::Char('s') => sure_all(&node, &stopped, true),
                 KeyCode::Char('d') => sure_all(&node, &running, false),
+                KeyCode::Char('u') => Some(sure_node(&node, ops::NodeCmd::AptUpdate, running.len())),
+                KeyCode::Char('R') => Some(sure_node(&node, ops::NodeCmd::Reboot, running.len())),
+                KeyCode::Char('X') => Some(sure_node(&node, ops::NodeCmd::Shutdown, running.len())),
                 _ => None,
             };
             match sure {
@@ -741,6 +762,13 @@ mod tests {
         // Nothing is running, so d asks nothing and the menu stays.
         let (d, _) = key(menu(), KeyCode::Char('d'), |_| None);
         assert!(matches!(d, Some(Dialog::Node { .. })));
+        let (d, _) = key(menu(), KeyCode::Char('R'), |_| None);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(s.op, Op::Cmds { label: "reboot node pve".into(), cmds: vec![ops::node_cmd("pve", ops::NodeCmd::Reboot)] });
+        assert!(s.lines.iter().any(|l| l.1));
+        let (d, _) = key(menu(), KeyCode::Char('u'), |_| None);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert_eq!(s.lines.len(), 1);
         let (d, _) = key(menu(), KeyCode::Esc, |_| None);
         assert!(d.is_none());
     }

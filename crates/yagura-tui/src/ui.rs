@@ -165,6 +165,8 @@ fn dialog(f: &mut Frame, d: &Dialog) {
                 Line::raw("  m  maintenance mode on        M  maintenance mode off"),
                 Line::raw(format!("  s  start the {} stopped guests", stopped.len())),
                 Line::raw(format!("  d  shut down the {} running guests", running.len())),
+                Line::raw("  u  apt update (refresh package lists)"),
+                Line::raw("  R  reboot the node        X  shut the node down"),
                 Line::raw(""),
                 Line::styled("Esc close  (each one asks y/n first)", DIM),
             ];
