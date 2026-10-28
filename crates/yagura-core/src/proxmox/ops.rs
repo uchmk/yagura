@@ -224,6 +224,49 @@ impl Cmd {
     }
 }
 
+/// The tools that only act on the node they run on (`pvesh` and `ha-manager` reach the whole cluster).
+const NODE_LOCAL: [&str; 4] = ["qm", "pct", "vzdump", "pveam"];
+
+/// `cmd` for a guest or storage on `node`: run through `ssh root@<node>` (key login, no password prompt, 10 s to connect) when
+/// the tool only works on its own node and `node` is not `local`. `tty` asks ssh for a terminal (a console). Anything else is
+/// returned as it is, so a single-node setup never touches ssh.
+pub fn remote_cmd(local: &str, node: &str, cmd: Cmd, tty: bool) -> Cmd {
+    let host_ok = !node.is_empty() && node.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'));
+    if !host_ok || node == local || !NODE_LOCAL.contains(&cmd.prog.as_str()) {
+        return cmd;
+    }
+    // ssh hands the words to the remote shell as one line, so each one is quoted.
+    let quote = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
+    let mut args: Vec<String> = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"].iter().map(|s| s.to_string()).collect();
+    if tty {
+        args.push("-t".into());
+    }
+    args.push(format!("root@{node}"));
+    args.push(std::iter::once(cmd.prog.as_str()).chain(cmd.args.iter().map(String::as_str)).map(quote).collect::<Vec<_>>().join(" "));
+    Cmd { prog: "ssh".into(), args }
+}
+
+/// [`remote_cmd`] seen from this node.
+pub fn on_node(node: &str, cmd: Cmd) -> Cmd {
+    remote_cmd(&this_node(), node, cmd, false)
+}
+
+/// [`remote_cmd`] with a terminal, for a console.
+pub fn console_on_node(node: &str, cmd: Cmd) -> Cmd {
+    remote_cmd(&this_node(), node, cmd, true)
+}
+
+/// The vzdump command for a guest (run on the node that holds it).
+pub fn dump_cmd(id: u32, d: &Dump) -> Cmd {
+    Cmd { prog: "vzdump".into(), args: dump_args(id, d) }
+}
+
+/// The snapshot command for a guest.
+pub fn snap_cmd(kind: Kind, id: u32, op: &SnapOp) -> Cmd {
+    let (prog, args) = snap_command(kind, id, op);
+    Cmd { prog: prog.into(), args }
+}
+
 /// Run the commands one after the other; the first that fails ends it, and the error says which one.
 pub fn run_all(cmds: &[Cmd]) -> Result<(), String> {
     for (i, c) in cmds.iter().enumerate() {
@@ -2190,6 +2233,22 @@ mod tests {
         let m = disk_move_cmd("pve", Kind::Lxc, 200, "mp0", "tank");
         assert_eq!(m.args[1], "/nodes/pve/lxc/200/move_volume");
         assert_eq!(disk_detach_cmd(Kind::Qemu, 100, "scsi1").args, ["set", "100", "--delete", "scsi1"]);
+    }
+
+    #[test]
+    fn commands_for_another_node_go_through_ssh() {
+        let qm = || Cmd::new("qm", &["set", "7", "--name", "it's"]);
+        assert_eq!(remote_cmd("pve", "pve", qm(), false), qm());
+        assert_eq!(remote_cmd("pve", "", qm(), false), qm());
+        let pvesh = Cmd::new("pvesh", &["get", "/nodes"]);
+        assert_eq!(remote_cmd("pve", "pve2", pvesh.clone(), false), pvesh);
+        let r = remote_cmd("pve", "pve2", qm(), false);
+        assert_eq!(r.prog, "ssh");
+        assert_eq!(r.args, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "root@pve2", "'qm' 'set' '7' '--name' 'it'\\''s'"]);
+        assert!(remote_cmd("pve", "pve2", qm(), true).args.contains(&"-t".to_string()));
+        // A node name that is not a host name is never put on a command line.
+        assert_eq!(remote_cmd("pve", "x; rm -rf /", qm(), false), qm());
+        assert_eq!(remote_cmd("pve", "-oProxyCommand=x", Cmd::new("pct", &["enter", "1"]), false).prog, "pct");
     }
 
     #[test]

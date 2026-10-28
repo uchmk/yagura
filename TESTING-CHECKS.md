@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-321 rows to press (321 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+322 rows to press (322 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -337,6 +337,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.87** `I` on a VM shows the cloud-init fields filled from the config; Tab moves, a wrong value shows a red reason and Enter stays, Enter on a good form lists the changed fields and runs `qm set` after y/n; empty fields are not sent; no password field; a container refuses `I`.
 - [ ] **3p.88** `p` on a backup job opens the six keep-* counts filled from the job; digits only, Tab moves, a wrong value shows a red reason; Enter asks y/n (red line: older backups are deleted at the next run) and runs `pvesh set /cluster/backup/<id> --prune-backups ...`; all empty runs `--delete prune-backups`.
 - [ ] **3p.89** With `webhook_format = "ntfy"` a new alert is POSTed to the ntfy address as plain text with a Title and Priority header (checked against ntfy.sh); the default json is unchanged.
+- [ ] **3p.90** On a cluster, a guest on another node: a snapshot, `e` set, `M` move or `c` console runs through `ssh root@<node>` (needs key login between the nodes); a guest on this node and a single-node host never use ssh.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

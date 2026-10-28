@@ -383,6 +383,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.87 | `I` on a VM shows the cloud-init fields filled from the config; Tab moves, a wrong value shows a red reason and Enter stays, Enter on a good form lists the changed fields and runs `qm set` after y/n; empty fields are not sent; no password field; a container refuses `I`. |
 | 3p.88 | `p` on a backup job opens the six keep-* counts filled from the job; digits only, Tab moves, a wrong value shows a red reason; Enter asks y/n (red line: older backups are deleted at the next run) and runs `pvesh set /cluster/backup/<id> --prune-backups ...`; all empty runs `--delete prune-backups`. |
 | 3p.89 | With `webhook_format = "ntfy"` a new alert is POSTed to the ntfy address as plain text with a Title and Priority header (checked against ntfy.sh); the default json is unchanged. |
+| 3p.90 | On a cluster, a guest on another node: a snapshot, `e` set, `M` move or `c` console runs through `ssh root@<node>` (needs key login between the nodes); a guest on this node and a single-node host never use ssh. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

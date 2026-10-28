@@ -1013,7 +1013,8 @@ fn open_console(app: &mut App) {
     }
     let hint = if g.kind == proxmox::Kind::Lxc { "leave with exit" } else { "leave with Ctrl+O" };
     app.status.clear();
-    app.console = Some((format!("{} {} ({hint})", g.id, g.name), proxmox::ops::console_cmd(g.kind, g.id)));
+    app.console =
+        Some((format!("{} {} ({hint})", g.id, g.name), proxmox::ops::console_on_node(&g.node, proxmox::ops::console_cmd(g.kind, g.id))));
 }
 
 /// Give the terminal to the console command, then take the screen back.
@@ -1404,9 +1405,12 @@ fn dialog_key(app: &mut App, code: KeyCode, tx: &Sender<Job>) {
         .name("yagura-op".into())
         .spawn(move || {
             let r = match &op {
-                dialog::Op::Snap(s) => proxmox::ops::snapshot(t.kind, t.id, s),
-                dialog::Op::Dump(d) => proxmox::ops::vzdump(t.id, d),
-                dialog::Op::Cmds { cmds, .. } => proxmox::ops::run_all(cmds),
+                // qm, pct, vzdump and pveam only work on their own node: a guest elsewhere is reached over ssh.
+                dialog::Op::Snap(s) => proxmox::ops::run_all(&[proxmox::ops::on_node(&t.node, proxmox::ops::snap_cmd(t.kind, t.id, s))]),
+                dialog::Op::Dump(d) => proxmox::ops::run_all(&[proxmox::ops::on_node(&t.node, proxmox::ops::dump_cmd(t.id, d))]),
+                dialog::Op::Cmds { cmds, .. } => {
+                    proxmox::ops::run_all(&cmds.iter().map(|c| proxmox::ops::on_node(&t.node, c.clone())).collect::<Vec<_>>())
+                }
             };
             let _ = tx.send(Job::Op(t.id, label, r));
         })
