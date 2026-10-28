@@ -8,6 +8,7 @@ mod dialog;
 mod find;
 mod model;
 mod ui;
+mod webhook;
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -1489,6 +1490,7 @@ fn watch_alerts(app: &mut App) {
     let new: Vec<&str> = cur.iter().filter(|(k, _)| !app.alerts_seen.contains(k)).map(|(_, t)| t.as_str()).collect();
     if !new.is_empty() {
         app.status = format!("ALERT: {}", new.join("; "));
+        webhook::send(&config::get().webhook, &app.model.host, &new);
         if config::get().bell {
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x07");

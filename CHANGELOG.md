@@ -6,6 +6,12 @@
 
 ## [未リリース]
 
+## [0.73.96] - 2026-10-28
+
+### 追加
+
+- yagura-tui: 新しい警告が出たら、`tui.toml` の `webhook`（または環境変数 `YAGURA_WEBHOOK`）の `http(s)` のアドレスへ JSON を POST する（`curl` を別スレッドで回す。本文は `{"text":…,"content":…}`。Slack・Mattermost・Teams は `text`、Discord は `content`）。空なら送らない。送れなくても画面は止まらない。
+
 ## [0.73.95] - 2026-10-28
 
 ### 追加

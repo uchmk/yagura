@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-306 rows to press (306 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+307 rows to press (307 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -322,6 +322,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.72** `M` on a guest picks another online node; a running VM moves live (Tab switches to offline), a container restarts on the target. Moves that stop the guest show a red warning, and y/n is asked last.
 - [ ] **3p.73** `O` on a guest puts it under HA and `Q` takes it out again (the guest keeps running); both ask first, removing in red; a template is refused.
 - [ ] **3p.74** The header cpu turns red from `cpu_hot` (90%) and the memory from `mem_full` (90%); `tui.toml` or `YAGURA_CPU_HOT` / `YAGURA_MEM_FULL` change the limits.
+- [ ] **3p.75** With `webhook = "https://…"` in `tui.toml` (or `YAGURA_WEBHOOK`), a new alert is POSTed as `{"text":…,"content":…}`; with no address nothing is sent, and a dead endpoint does not stop the screen.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns

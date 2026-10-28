@@ -18,6 +18,8 @@ pub struct Config {
     pub cpu_hot: f64,
     /// The host memory use is high from here (percent); the header reads red.
     pub mem_full: f64,
+    /// POST new alerts as JSON to this address (empty: off).
+    pub webhook: String,
     /// Ring the terminal bell when a new alert appears.
     pub bell: bool,
     /// The cleanup keeps this many of the newest backups of each guest.
@@ -35,6 +37,7 @@ impl Default for Config {
             temp_hot: 85.0,
             cpu_hot: 90.0,
             mem_full: 90.0,
+            webhook: String::new(),
             bell: true,
             keep_backups: 3,
             snapshot_days: 30,
@@ -65,6 +68,9 @@ impl Config {
         }
         if let Some(v) = num("mem_full").filter(|v| *v > 0.0) {
             c.mem_full = v;
+        }
+        if let Some(v) = t.get("webhook").and_then(|v| v.as_str()) {
+            c.webhook = v.trim().to_string();
         }
         if let Some(v) = t.get("bell").and_then(|v| v.as_bool()) {
             c.bell = v;
@@ -98,6 +104,9 @@ impl Config {
         }
         if let Some(v) = num("YAGURA_MEM_FULL").filter(|v| *v > 0.0) {
             self.mem_full = v;
+        }
+        if let Some(v) = get("YAGURA_WEBHOOK") {
+            self.webhook = v.trim().to_string();
         }
         if let Some(v) = num("YAGURA_KEEP_BACKUPS").filter(|v| *v >= 1.0) {
             self.keep_backups = v as usize;
@@ -154,6 +163,13 @@ mem_full = 0
         assert_eq!((c.cpu_hot, c.mem_full), (75.0, 90.0));
         let c = c.with_env(|k| (k == "YAGURA_MEM_FULL").then(|| "80".to_string()));
         assert_eq!(c.mem_full, 80.0);
+        let c = Config::from_toml(
+            "webhook = \" https://x/h \"
+",
+        );
+        assert_eq!(c.webhook, "https://x/h");
+        let c = c.with_env(|k| (k == "YAGURA_WEBHOOK").then(String::new));
+        assert_eq!(c.webhook, "");
         let c = Config::from_toml("keep_backups = 5\nsnapshot_days = 0\n");
         assert_eq!((c.keep_backups, c.snapshot_days), (5, 30));
         let c = c.with_env(|k| (k == "YAGURA_SNAPSHOT_DAYS").then(|| "14".to_string()));
