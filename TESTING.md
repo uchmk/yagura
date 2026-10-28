@@ -361,6 +361,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.65 | `K` in the host screen lists the node's certificates with the days left; under 30 days reads EXPIRES SOON in red, past reads EXPIRED. |
 | 3p.66 | In the Tasks screen, `f` steps the list through all, failed, running, last 24 h and last 7 d, and `/` cuts it by a guest ID, type, user, node or status; Enter and x act on the row left on screen. |
 | 3p.67 | `D` in the host screen lists the node's disks with model, size, health and wearout and the main SMART values; a health other than PASSED or OK reads UNHEALTHY in red. |
+| 3p.68 | `W` in the host screen opens a five-field form (time zone, search domain, dns1 to dns3) filled with the current values; the last Enter asks y/n before the two pvesh set calls run, and a bad zone or IP is refused with a reason. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

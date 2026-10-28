@@ -411,6 +411,29 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("j/k move  Enter on/off  n new  c change  d delete  r run now (each asks first)  Esc close", DIM));
             (" backup jobs ".to_string(), l)
         }
+        Dialog::NodeEdit { node, step, vals, err } => {
+            const NAMES: [&str; 5] = ["time zone", "search", "dns1", "dns2", "dns3"];
+            const HINTS: [&str; 5] = [
+                "like Asia/Tokyo or UTC",
+                "the search domain, like example.com or lan",
+                "the first name server, an IP address",
+                "the second name server (empty for none)",
+                "the third name server (empty for none)",
+            ];
+            let mut l = vec![];
+            for (i, n) in NAMES.iter().enumerate() {
+                let cur = i == *step;
+                let st = if cur { Style::new().add_modifier(Modifier::BOLD) } else { DIM };
+                l.push(Line::styled(format!("  {n:<9} {}{}", vals[i], if cur { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            l.push(Line::styled(HINTS[*step], DIM));
+            if !err.is_empty() {
+                l.push(Line::styled(err.clone(), RED));
+            }
+            l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
+            (format!(" time and DNS of {node} "), l)
+        }
         Dialog::JobEdit { id, step, vals, err } => {
             const NAMES: [&str; 4] = ["storage", "schedule", "guests", "mode"];
             const HINTS: [&str; 4] = [
@@ -682,7 +705,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x  f    clean up old snapshots and backups / stop a task (Tasks) (asks first) / step the Tasks filter (failed, running, 24 h, 7 d)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, U package updates, V refresh them, K certificates, D disks and SMART;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Host: A users and permissions, E HA, R replication, Z ZFS and Ceph health, P services, X time and DNS, W change them, U package updates, V refresh them, K certificates, D disks and SMART;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1903,6 +1926,15 @@ mod tests {
         let s = text(&render(&a));
         assert!(s.contains("show: failed") && s.contains("find: VZDUMP"), "{s}");
         assert_eq!(TaskFilter::Week.next(), TaskFilter::All);
+    }
+
+    #[test]
+    fn the_node_form_draws() {
+        let mut a = app(View::Host);
+        let vals = ["Asia/Tokyo", "lan", "1.1.1.1", "", ""].map(String::from);
+        a.dialog = Some(Dialog::NodeEdit { node: "pve".into(), step: 2, vals, err: "dns1 is an IP address like 192.168.1.1".into() });
+        let s = text(&render(&a));
+        assert!(s.contains("time and DNS of pve") && s.contains("Asia/Tokyo") && s.contains("dns1 is an IP"), "{s}");
     }
 
     #[test]

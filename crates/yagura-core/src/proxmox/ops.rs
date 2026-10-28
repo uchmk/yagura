@@ -728,6 +728,61 @@ pub fn service_cmd(node: &str, name: &str, action: &str) -> Cmd {
     Cmd::new("pvesh", &["create", &format!("/nodes/{node}/services/{name}/{action}")])
 }
 
+/// The editable node settings `[timezone, search, dns1, dns2, dns3]` from the `/time` and `/dns` answers.
+pub fn parse_node_values(time: &str, dns: &str) -> Option<[String; 5]> {
+    let j = |s: &str| serde_json::from_str::<Value>(s).unwrap_or(Value::Null);
+    let (time, dns) = (j(time), j(dns));
+    if !time.is_object() || !dns.is_object() {
+        return None;
+    }
+    let g = |v: &Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+    Some([g(&time, "timezone"), g(&dns, "search"), g(&dns, "dns1"), g(&dns, "dns2"), g(&dns, "dns3")])
+}
+
+/// The current time zone and resolver of this node, to start the edit form from.
+pub fn node_values() -> Option<[String; 5]> {
+    let node = this_node();
+    if node.is_empty() {
+        return None;
+    }
+    let get = |p: &str| pvesh(&format!("/nodes/{node}/{p}"), &[]).unwrap_or_default();
+    parse_node_values(&get("time"), &get("dns"))
+}
+
+/// The two calls that set the time zone and the resolver from `[timezone, search, dns1, dns2, dns3]`. The resolver is written whole,
+/// so an empty `dns2` or `dns3` drops that server. `node` comes from this machine's host name.
+pub fn node_save_cmds(node: &str, fields: &[String; 5]) -> Result<Vec<Cmd>, String> {
+    let [zone, search, d1, d2, d3] = fields.each_ref().map(|s| s.trim());
+    let word = |s: &str, extra: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c));
+    if !word(node, "-_.") {
+        return Err("this machine's host name is not usable".into());
+    }
+    if !word(zone, "/_+-") || zone.starts_with('/') || zone.contains("..") {
+        return Err("the time zone is like Asia/Tokyo or UTC".into());
+    }
+    if !word(search, ".-_") {
+        return Err("the search domain is like example.com or lan".into());
+    }
+    let ip = |s: &str| s.parse::<std::net::IpAddr>().is_ok();
+    if !ip(d1) {
+        return Err("dns1 is an IP address like 192.168.1.1".into());
+    }
+    for (n, d) in [("dns2", d2), ("dns3", d3)] {
+        if !d.is_empty() && !ip(d) {
+            return Err(format!("{n} is an IP address, or empty"));
+        }
+    }
+    let mut dns = vec!["set".to_string(), format!("/nodes/{node}/dns"), "--search".into(), search.into(), "--dns1".into(), d1.into()];
+    for (k, d) in [("--dns2", d2), ("--dns3", d3)] {
+        if !d.is_empty() {
+            dns.push(k.into());
+            dns.push(d.into());
+        }
+    }
+    let dns: Vec<&str> = dns.iter().map(String::as_str).collect();
+    Ok(vec![Cmd::new("pvesh", &["set", &format!("/nodes/{node}/time"), "--timezone", zone]), Cmd::new("pvesh", &dns)])
+}
+
 /// The lines of the node page: the clock (`/nodes/<n>/time`), the resolver (`/dns`) and the hosts file (`/hosts`).
 pub fn parse_node_settings(time: &str, dns: &str, hosts: &str) -> Vec<String> {
     let j = |s: &str| serde_json::from_str::<Value>(s).unwrap_or(Value::Null);
@@ -1342,6 +1397,23 @@ mod tests {
             assert!(backup_job_save_cmd(None, &bad).is_err(), "{bad:?}");
         }
         assert_eq!(backup_job_delete_cmd("backup-1").args, ["delete", "/cluster/backup/backup-1"]);
+    }
+
+    #[test]
+    fn node_time_and_dns_are_read_and_set() {
+        let v = parse_node_values(r#"{"timezone":"UTC","time":1}"#, r#"{"search":"lan","dns1":"1.1.1.1","dns2":"9.9.9.9"}"#).unwrap();
+        assert_eq!(v, ["UTC", "lan", "1.1.1.1", "9.9.9.9", ""].map(String::from));
+        assert!(parse_node_values("x", "{}").is_none());
+        let c = node_save_cmds("pve", &v).unwrap();
+        assert_eq!(c[0].args, ["set", "/nodes/pve/time", "--timezone", "UTC"]);
+        assert_eq!(c[1].args, ["set", "/nodes/pve/dns", "--search", "lan", "--dns1", "1.1.1.1", "--dns2", "9.9.9.9"]);
+        let bad = |i: usize, s: &str| {
+            let mut f = v.clone();
+            f[i] = s.into();
+            node_save_cmds("pve", &f).is_err()
+        };
+        assert!(bad(0, "") && bad(0, "../x") && bad(0, "/etc") && bad(1, "a b") && bad(2, "") && bad(2, "host") && bad(3, "x;y"));
+        assert!(node_save_cmds("../x", &v).is_err());
     }
 
     #[test]

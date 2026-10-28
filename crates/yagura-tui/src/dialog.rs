@@ -160,6 +160,14 @@ pub enum Dialog {
         vals: [String; 4],
         err: String,
     },
+    /// Changing this node's time zone and resolver: the fields timezone, search, dns1, dns2 and dns3, the one being typed,
+    /// and what was wrong with the last try.
+    NodeEdit {
+        node: String,
+        step: usize,
+        vals: [String; 5],
+        err: String,
+    },
     /// Everything on a storage (`None` while it is read), the cursor, and how full the storage is (used, total).
     Content {
         node: String,
@@ -552,6 +560,17 @@ pub fn sure_job_save(id: Option<&str>, vals: &[String; 4], cmd: ops::Cmd) -> Sur
     Sure { t: Target::none(), op: Op::Cmds { label: format!("job {}", id.unwrap_or("new")), cmds: vec![cmd] }, lines }
 }
 
+/// The last question for changing a node's time zone and resolver.
+pub fn sure_node_save(node: &str, vals: &[String; 5], cmds: Vec<ops::Cmd>) -> Sure {
+    let dns: Vec<&str> = vals[2..].iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let lines = vec![
+        (format!("set the time zone of {node} to {}", vals[0].trim()), false),
+        (format!("set its DNS to {} (search {})", dns.join(", "), vals[1].trim()), false),
+        ("a wrong DNS can stop the node from reaching its repositories".into(), true),
+    ];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("time and DNS of {node}"), cmds }, lines }
+}
+
 /// The last question for deleting one volume of a storage.
 pub fn sure_vol(v: &ops::Vol) -> Sure {
     let mut lines = vec![(format!("delete {} ({}, {})", v.volid, v.content, bytes(v.size)), false)];
@@ -918,6 +937,26 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => {}
             }
             (Some(Dialog::JobEdit { id, step, vals, err }), Next::Nothing)
+        }
+        Dialog::NodeEdit { node, mut step, mut vals, mut err } => {
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Char(c) if !c.is_control() && vals[step].chars().count() < 80 => vals[step].push(c),
+                KeyCode::Backspace => {
+                    if vals[step].is_empty() && step > 0 {
+                        step -= 1;
+                    } else {
+                        vals[step].pop();
+                    }
+                }
+                KeyCode::Enter if step < 4 => step += 1,
+                KeyCode::Enter => match ops::node_save_cmds(&node, &vals) {
+                    Ok(cmds) => return (Some(Dialog::Sure(sure_node_save(&node, &vals, cmds))), Next::Nothing),
+                    Err(e) => err = e,
+                },
+                _ => {}
+            }
+            (Some(Dialog::NodeEdit { node, step, vals, err }), Next::Nothing)
         }
         Dialog::Content { node, storage, fill, list, mut sel } => {
             let n = list.as_ref().map_or(0, Vec::len);
@@ -1371,6 +1410,28 @@ mod tests {
         assert!(matches!(&s.op, Op::Cmds { label, cmds } if label == "run job backup-1" && cmds[0].args[1].ends_with("/vzdump")));
         // Esc leaves the form.
         let (d, _) = key(Dialog::JobEdit { id: None, step: 0, vals: Default::default(), err: String::new() }, KeyCode::Esc, none);
+        assert!(d.is_none());
+    }
+
+    #[test]
+    fn the_node_form_walks_five_fields_and_asks() {
+        let none = |_: &Target| None;
+        let form = |step| Dialog::NodeEdit {
+            node: "pve".into(),
+            step,
+            vals: ["UTC", "lan", "1.1.1.1", "", ""].map(String::from),
+            err: String::new(),
+        };
+        let (d, _) = key(form(0), KeyCode::Enter, none);
+        assert!(matches!(d, Some(Dialog::NodeEdit { step: 1, .. })));
+        let (d, _) = key(form(4), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(matches!(&s.op, Op::Cmds { cmds, .. } if cmds.len() == 2));
+        let (d, _) =
+            key(Dialog::NodeEdit { node: "pve".into(), step: 4, vals: Default::default(), err: String::new() }, KeyCode::Enter, none);
+        let Some(Dialog::NodeEdit { err, .. }) = d else { panic!("accepted nothing") };
+        assert!(err.contains("time zone"), "{err}");
+        let (d, _) = key(form(2), KeyCode::Esc, none);
         assert!(d.is_none());
     }
 

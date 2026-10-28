@@ -110,6 +110,8 @@ enum Job {
     /// The lines for the open `Dialog::Text` with this title.
     Text(&'static str, Vec<String>),
     Jobs(Vec<proxmox::ops::BackupJob>),
+    /// The node's time zone and resolver to start the edit form from (`None` when they could not be read).
+    NodeValues(Option<[String; 5]>),
     Content(String, String, Vec<proxmox::ops::Vol>),
     Firewall(u32, Option<(bool, Vec<proxmox::ops::FwRule>)>),
     Cluster(Cluster),
@@ -146,7 +148,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -273,6 +275,14 @@ fn run(
                         *lines = Some(l);
                     }
                 }
+                Job::NodeValues(v) => match v {
+                    Some(vals) if app.status == NODE_READING => {
+                        app.status.clear();
+                        app.dialog = Some(dialog::Dialog::NodeEdit { node: proxmox::ops::this_node(), step: 0, vals, err: String::new() });
+                    }
+                    Some(_) => {}
+                    None => app.status = "could not read the node's time and DNS".into(),
+                },
                 Job::Jobs(l) => {
                     if let Some(dialog::Dialog::Jobs { list, .. }) = app.dialog.as_mut() {
                         *list = Some(l);
@@ -589,6 +599,7 @@ fn run(
             KeyCode::Char('U') if app.view == View::Host => open_apt(app, jobs_tx),
             KeyCode::Char('K') if app.view == View::Host => open_certs(app, jobs_tx),
             KeyCode::Char('D') if app.view == View::Host => open_disks(app, jobs_tx),
+            KeyCode::Char('W') if app.view == View::Host => open_node_edit(app, jobs_tx),
             KeyCode::Char('V') if app.view == View::Host => {
                 app.dialog = Some(dialog::Dialog::Sure(dialog::sure_apt_refresh(&proxmox::ops::this_node())));
             }
@@ -977,6 +988,20 @@ fn open_services(app: &mut App, tx: &Sender<Job>) {
             let _ = tx.send(Job::Services(node, list));
         })
         .expect("spawn the services thread");
+}
+
+const NODE_READING: &str = "reading the node's time and DNS...";
+
+/// `W` in the host screen: read the time zone and resolver, then open the form to change them (asks before it writes).
+fn open_node_edit(app: &mut App, tx: &Sender<Job>) {
+    app.status = NODE_READING.into();
+    let tx = tx.clone();
+    std::thread::Builder::new()
+        .name("yagura-node-edit".into())
+        .spawn(move || {
+            let _ = tx.send(Job::NodeValues(proxmox::ops::node_values()));
+        })
+        .expect("spawn the node edit thread");
 }
 
 /// `D` in the host screen: this node's disks with their SMART health, wearout and values (read only).
