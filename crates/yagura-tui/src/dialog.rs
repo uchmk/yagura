@@ -231,6 +231,8 @@ pub enum Dialog {
         vals: [String; 2],
         err: String,
     },
+    /// The form of a new guest (`a`).
+    Create(CreateForm),
     /// The drives of a guest: move one to another storage (`m`, typing the storage) or detach it (`d`).
     Disks {
         t: Target,
@@ -274,6 +276,8 @@ pub enum Next {
     Restore(Backup),
     /// Clone this guest under this name (`full` or linked): the main loop looks up a free guest id first.
     CloneId(Target, String, bool),
+    /// Create a guest from this form: the main loop looks up a free guest id first.
+    CreateId(CreateForm),
 }
 
 /// `YYYY-MM-DD HH:MM` (UTC) of a Unix time.
@@ -600,6 +604,80 @@ pub fn sure_disk_move(t: &Target, key: &str, value: &str, to: &str) -> Option<Su
         op: Op::Cmds { label: format!("move {key} to {to}"), cmds: vec![ops::disk_move_cmd(&t.node, t.kind, t.id, key, to)] },
         lines,
     })
+}
+
+/// The form of a new guest.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreateForm {
+    pub kind: Kind,
+    /// name, cores, memory (MiB), disk (GiB), storage, bridge, ISO (VM) or template (container).
+    pub v: [String; 7],
+    pub field: usize,
+}
+
+impl CreateForm {
+    pub const FIELDS: usize = 7;
+
+    pub fn new() -> CreateForm {
+        let s = |x: &str| x.to_string();
+        CreateForm { kind: Kind::Qemu, v: [s(""), s("2"), s("2048"), s("32"), s("local-lvm"), s("vmbr0"), s("")], field: 0 }
+    }
+
+    /// Whether the field being edited takes this character.
+    pub fn accepts(&self, c: char) -> bool {
+        let word = c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
+        match self.field {
+            0 => word && c != '_' && self.v[0].len() < 63,
+            1..=3 => c.is_ascii_digit() && self.v[self.field].len() < 7,
+            4 | 5 => word && self.v[self.field].len() < 40,
+            _ => (word || matches!(c, ':' | '/' | '~' | '+')) && self.v[6].len() < 120,
+        }
+    }
+
+    /// The guest to create under `id`, or why the form is not ready.
+    pub fn guest(&self, id: u32) -> Result<ops::NewGuest, String> {
+        let num = |s: &str| s.parse::<u32>().unwrap_or(0);
+        let g = ops::NewGuest {
+            kind: self.kind,
+            id,
+            name: self.v[0].clone(),
+            cores: num(&self.v[1]),
+            mem_mib: num(&self.v[2]),
+            disk_gib: num(&self.v[3]),
+            storage: self.v[4].clone(),
+            bridge: self.v[5].clone(),
+            source: self.v[6].clone(),
+        };
+        ops::create_cmd(&g).map(|_| g)
+    }
+}
+
+/// The last question for creating the guest of the form as `id`.
+pub fn sure_create(f: &CreateForm, id: u32) -> Result<Sure, String> {
+    let g = f.guest(id)?;
+    let cmd = ops::create_cmd(&g)?;
+    let what = if g.kind == Kind::Lxc { "container" } else { "VM" };
+    let mut lines = vec![
+        (
+            format!(
+                "create the {what} {id} {}: {} cores, {} MiB, {} GiB on {}, bridge {}",
+                g.name, g.cores, g.mem_mib, g.disk_gib, g.storage, g.bridge
+            ),
+            false,
+        ),
+        (
+            if g.source.is_empty() {
+                "no ISO: attach one later in the drives screen (v)".to_string()
+            } else {
+                format!("from {}", g.source)
+            },
+            false,
+        ),
+    ];
+    if g.kind == Kind::Lxc {
+        lines.push(("no root password is set: use pct enter, or set one inside".to_string(), false));
+    }
+    Ok(Sure { t: Target::none(), op: Op::Cmds { label: format!("create {id}"), cmds: vec![cmd] }, lines })
 }
 
 /// The last question for putting the ISO `volid` into the CD-ROM drive `key` (`none` ejects it).
@@ -1434,6 +1512,25 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 _ => stay(t, disks, keys, sel, gib),
             }
         }
+        Dialog::Create(mut f) => {
+            match code {
+                KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::F(2) => f.kind = if f.kind == Kind::Qemu { Kind::Lxc } else { Kind::Qemu },
+                KeyCode::Tab | KeyCode::Down => f.field = (f.field + 1) % CreateForm::FIELDS,
+                KeyCode::BackTab | KeyCode::Up => f.field = (f.field + CreateForm::FIELDS - 1) % CreateForm::FIELDS,
+                KeyCode::Backspace => {
+                    f.v[f.field].pop();
+                }
+                KeyCode::Enter => {
+                    if f.guest(0).is_ok() {
+                        return (None, Next::CreateId(f));
+                    }
+                }
+                KeyCode::Char(c) if f.accepts(c) => f.v[f.field].push(c),
+                _ => {}
+            }
+            (Some(Dialog::Create(f)), Next::Nothing)
+        }
         Dialog::Disks { t, list, mut sel, mut ask, mut text } => {
             let n = list.as_ref().map_or(0, Vec::len);
             let cur = list.as_ref().and_then(|l| l.get(sel)).cloned();
@@ -2184,6 +2281,40 @@ mod tests {
         let Some(Dialog::Sure(s)) = key(open(2), KeyCode::Char('d'), none).0 else { panic!("no destroy question") };
         assert!(s.lines[0].1 && s.lines[0].0.starts_with("destroy unused0"));
         assert!(sure_disk_detach(&target(Kind::Lxc), "rootfs", "a:r").is_none());
+    }
+
+    #[test]
+    fn a_guest_is_created_from_the_form() {
+        let none = |_: &Target| None;
+        let mut d = Some(Dialog::Create(CreateForm::new()));
+        // The name is empty: Enter stays.
+        d = key(d.unwrap(), KeyCode::Enter, none).0;
+        assert!(matches!(d, Some(Dialog::Create(_))));
+        for c in "web".chars() {
+            d = key(d.unwrap(), KeyCode::Char(c), none).0;
+        }
+        // A digit does not go into the name's neighbour until Tab moves on; a letter is refused in a number.
+        d = key(d.unwrap(), KeyCode::Tab, none).0;
+        d = key(d.unwrap(), KeyCode::Char('x'), none).0;
+        d = key(d.unwrap(), KeyCode::Backspace, none).0;
+        d = key(d.unwrap(), KeyCode::Char('4'), none).0;
+        let Some(Dialog::Create(f)) = &d else { panic!("left the form") };
+        assert_eq!((f.v[0].as_str(), f.v[1].as_str()), ("web", "4"));
+        let (d, next) = key(d.unwrap(), KeyCode::Enter, none);
+        assert!(d.is_none());
+        let Next::CreateId(f) = next else { panic!("no id lookup") };
+        let Ok(s) = sure_create(&f, 120) else { panic!("not ready") };
+        let g = f.guest(120).unwrap();
+        assert_eq!(s.op, Op::Cmds { label: "create 120".into(), cmds: vec![ops::create_cmd(&g).unwrap()] });
+        assert_eq!(g.cores, 4);
+        // F2 switches to a container, which then needs a template.
+        let (d, _) = key(Dialog::Create(CreateForm::new()), KeyCode::F(2), none);
+        let Some(Dialog::Create(mut f)) = d else { panic!("left the form") };
+        assert_eq!(f.kind, Kind::Lxc);
+        f.v[0] = "ct".into();
+        assert!(f.guest(1).is_err());
+        f.v[6] = "local:vztmpl/debian-12.tar.zst".into();
+        assert!(f.guest(1).is_ok());
     }
 
     #[test]

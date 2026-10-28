@@ -424,6 +424,28 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             ));
             (format!(" grow a disk of {} {} ", t.id, t.name), l)
         }
+        Dialog::Create(f) => {
+            let ct = f.kind == yagura_core::proxmox::Kind::Lxc;
+            let labels = ["name", "cores", "memory MiB", "disk GiB", "storage", "bridge", if ct { "template *" } else { "ISO (optional)" }];
+            let mut l = vec![
+                Line::styled(format!("  new {}   F2 switches VM / container", if ct { "container" } else { "VM" }), DIM),
+                Line::raw(""),
+            ];
+            for (i, name) in labels.iter().enumerate() {
+                let on = i == f.field;
+                let st = if on { Style::new().add_modifier(Modifier::BOLD) } else { Style::new() };
+                l.push(Line::styled(format!("{} {name:<15} {}{}", if on { ">" } else { " " }, f.v[i], if on { "_" } else { "" }), st));
+            }
+            l.push(Line::raw(""));
+            match f.guest(0) {
+                Ok(_) => l.push(Line::styled("Enter create (asks next)  Tab next field  Esc cancel", DIM)),
+                Err(e) => l.push(Line::styled(e, RED)),
+            }
+            if ct {
+                l.push(Line::styled("template: local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst", DIM));
+            }
+            (" new guest ".to_string(), l)
+        }
         Dialog::Disks { t, list, sel, ask, text } => {
             let mut l = vec![];
             match list {
@@ -2318,6 +2340,14 @@ mod tests {
             Some(Dialog::Resize { t, disks: Some(vec![("scsi0".into(), "a:d0,size=32G".into())]), keys: vec![], sel: 0, gib: "10".into() });
         let s = text(&render(&a));
         assert!(s.contains("scsi0") && s.contains("size=32G") && s.contains("10_"), "{s}");
+    }
+
+    #[test]
+    fn the_new_guest_form_draws() {
+        let mut a = app(View::Guests);
+        a.dialog = Some(Dialog::Create(crate::dialog::CreateForm::new()));
+        let s = text(&render(&a));
+        assert!(s.contains("new VM") && s.contains("memory MiB") && s.contains("the name needs"), "{s}");
     }
 
     #[test]

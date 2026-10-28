@@ -377,6 +377,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.81 | In the guest network dialog (`N`), F2 adds a NIC in the first free `netN` (VM: virtio, container: `ethN` with DHCP) after y/n, F3 removes the selected one (red); in the grow dialog (`z`), F2 adds a disk of the typed GiB on the selected disk's storage (VM `scsiN`, container `mpN` at `/mnt/diskN`) without touching a CD-ROM or cloud-init drive. |
 | 3p.82 | `v` lists the drives of the guest (disks, CD-ROM, cloud-init, EFI, unused); `m` asks for a storage then y/n and moves the disk (source deleted), `d` detaches it as `unusedN` and on an `unusedN` line destroys it (red); a CD-ROM and an unused volume cannot be moved. |
 | 3p.83 | In the `v` drives screen of a VM, `i` on a CD-ROM row asks for an ISO volume id then y/n and inserts it, `e` ejects it, `a` adds an empty CD-ROM on the first free ide0-3; a container refuses all three. |
+| 3p.84 | `a` in the Guests screen opens a form (name, cores, memory, disk, storage, bridge, ISO or template); F2 switches VM / container, a wrong value shows in red and blocks Enter, Enter finds a free id and asks y/n, then the guest appears; a container without a template is refused. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

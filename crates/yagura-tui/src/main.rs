@@ -141,6 +141,7 @@ enum Job {
     Backups(String, String, Vec<proxmox::ops::Backup>),
     /// A free guest id for restoring this backup.
     RestoreId(proxmox::ops::Backup, Option<u32>),
+    CreateId(dialog::CreateForm, Option<u32>),
     CloneId(dialog::Target, String, bool, Option<u32>),
 }
 
@@ -151,7 +152,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  v drives (move, detach, CD-ROM)  Y clone  D delete  T template  N network  F firewall  M migrate  O add to HA  Q remove from HA  B boot options  e (storage) edit  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  N (host) network interfaces  I (host) upgrade packages  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  v drives (move, detach, CD-ROM)  a new guest  Y clone  D delete  T template  N network  F firewall  M migrate  O add to HA  Q remove from HA  B boot options  e (storage) edit  H graph span  A (host) users and permissions  E (host) HA  R (host) replication  Z (host) ZFS and Ceph health  P (host) services (restart, s start, x stop, l reload)  X (host) time, DNS and hosts  W (host) change the time zone and DNS  L (host) cluster and node firewall  U (host) package updates, V refresh the lists  K (host) certificates and expiry  D (host) disks and SMART  N (host) network interfaces  I (host) upgrade packages  f (tasks) show failed/running/24 h/7 d, / find  t console  w save a log  n node menu  x stop task  Enter (storage) backups  n (storage) add an NFS storage  X (storage) remove one  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -381,6 +382,14 @@ fn run(
                     }
                     None => app.status = "restore: no free guest id, or this file is not a guest backup".into(),
                 },
+                Job::CreateId(f, id) => match id.map(|id| dialog::sure_create(&f, id)) {
+                    Some(Ok(s)) => {
+                        app.status.clear();
+                        app.dialog = Some(dialog::Dialog::Sure(s));
+                    }
+                    Some(Err(e)) => app.status = format!("create: {e}"),
+                    None => app.status = "create: no free guest id".into(),
+                },
                 Job::CloneId(t, name, full, id) => match id {
                     Some(id) => {
                         app.status.clear();
@@ -545,6 +554,7 @@ fn run(
             KeyCode::Char('e') if app.view == View::Guests => open_edit(app),
             KeyCode::Char('z') if matches!(app.view, View::Guests | View::Graph(_)) => open_resize(app, jobs_tx),
             KeyCode::Char('v') if matches!(app.view, View::Guests | View::Graph(_)) => open_drives(app, jobs_tx),
+            KeyCode::Char('a') if app.view == View::Guests => open_create(app),
             KeyCode::Char('n') if app.view == View::Guests => open_node(app),
             KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
             KeyCode::Char('M') if matches!(app.view, View::Guests | View::Graph(_)) => open_migrate(app),
@@ -685,6 +695,12 @@ fn open_clone(app: &mut App) {
     // A template is cloned linked at first: it is quick and shares the template's disks.
     let full = !t.template;
     app.dialog = Some(dialog::Dialog::Clone { t, name, full });
+}
+
+/// `a`: the form of a new guest.
+fn open_create(app: &mut App) {
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Create(dialog::CreateForm::new()));
 }
 
 /// `O` / `Q`: put the guest under the cursor under HA, or take it out of HA.
@@ -1294,6 +1310,17 @@ fn dialog_key(app: &mut App, code: KeyCode, tx: &Sender<Job>) {
             .name("yagura-nextid".into())
             .spawn(move || {
                 let _ = tx.send(Job::RestoreId(b, proxmox::ops::next_id()));
+            })
+            .expect("spawn the next id thread");
+        return;
+    }
+    if let dialog::Next::CreateId(f) = run {
+        app.status = "create: looking for a free guest id...".into();
+        let tx = tx.clone();
+        std::thread::Builder::new()
+            .name("yagura-nextid".into())
+            .spawn(move || {
+                let _ = tx.send(Job::CreateId(f, proxmox::ops::next_id()));
             })
             .expect("spawn the next id thread");
         return;

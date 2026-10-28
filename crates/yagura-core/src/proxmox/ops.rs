@@ -1516,6 +1516,96 @@ pub fn net_del_cmd(kind: Kind, id: u32, dev: &str) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), "--delete", dev])
 }
 
+/// A guest to create: what the form of `a` collects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewGuest {
+    pub kind: Kind,
+    pub id: u32,
+    pub name: String,
+    pub cores: u32,
+    pub mem_mib: u32,
+    pub disk_gib: u32,
+    pub storage: String,
+    pub bridge: String,
+    /// A VM: the ISO volume to boot from (may be empty). A container: the template volume (required).
+    pub source: String,
+}
+
+/// `qm create` / `pct create`. A container gets no password (one on the command line shows in `ps`): enter it with `pct enter`.
+pub fn create_cmd(g: &NewGuest) -> Result<Cmd, String> {
+    let bad = |s: &str| s.is_empty() || s.contains([',', ':', ' ', '/']);
+    if !valid_guest_name(&g.name) {
+        return Err("the name needs letters, digits, - and .".into());
+    }
+    if !(1..=512).contains(&g.cores) {
+        return Err("cores must be 1 to 512".into());
+    }
+    if !(16..=4_194_304).contains(&g.mem_mib) {
+        return Err("memory must be 16 MiB or more".into());
+    }
+    if !(1..=65536).contains(&g.disk_gib) {
+        return Err("the disk must be 1 to 65536 GiB".into());
+    }
+    if bad(&g.storage) || bad(&g.bridge) {
+        return Err("the storage and the bridge need a name".into());
+    }
+    let src = !g.source.is_empty();
+    if src && (!g.source.contains(':') || g.source.contains([',', ' '])) {
+        return Err("the volume looks like storage:iso/name.iso".into());
+    }
+    let (id, cores, mem) = (g.id.to_string(), g.cores.to_string(), g.mem_mib.to_string());
+    let disk = format!("{}:{}", g.storage, g.disk_gib);
+    if g.kind == Kind::Lxc {
+        if !src || !g.source.contains("vztmpl") {
+            return Err("a container needs a template such as local:vztmpl/debian-12-standard.tar.zst".into());
+        }
+        let net = format!("name=eth0,bridge={},ip=dhcp", g.bridge);
+        return Ok(Cmd::new(
+            "pct",
+            &[
+                "create",
+                &id,
+                &g.source,
+                "--hostname",
+                &g.name,
+                "--cores",
+                &cores,
+                "--memory",
+                &mem,
+                "--rootfs",
+                &disk,
+                "--net0",
+                &net,
+                "--unprivileged",
+                "1",
+            ],
+        ));
+    }
+    let net = format!("virtio,bridge={}", g.bridge);
+    let mut args = vec![
+        "create",
+        &id,
+        "--name",
+        &g.name,
+        "--cores",
+        &cores,
+        "--memory",
+        &mem,
+        "--net0",
+        &net,
+        "--scsihw",
+        "virtio-scsi-single",
+        "--scsi0",
+        &disk,
+        "--ostype",
+        "l26",
+    ];
+    if src {
+        args.extend(["--cdrom", &g.source]);
+    }
+    Ok(Cmd::new("qm", &args))
+}
+
 /// Puts the ISO `volid` (`local:iso/debian.iso`) into the CD-ROM drive `key` of a VM, or ejects it when `volid` is `none`.
 pub fn cdrom_set_cmd(id: u32, key: &str, volid: &str) -> Option<Cmd> {
     let drive =
@@ -1907,6 +1997,42 @@ mod tests {
         let m = disk_move_cmd("pve", Kind::Lxc, 200, "mp0", "tank");
         assert_eq!(m.args[1], "/nodes/pve/lxc/200/move_volume");
         assert_eq!(disk_detach_cmd(Kind::Qemu, 100, "scsi1").args, ["set", "100", "--delete", "scsi1"]);
+    }
+
+    #[test]
+    fn guests_are_created_from_a_form() {
+        let g = NewGuest {
+            kind: Kind::Qemu,
+            id: 120,
+            name: "web".into(),
+            cores: 2,
+            mem_mib: 2048,
+            disk_gib: 32,
+            storage: "local-lvm".into(),
+            bridge: "vmbr0".into(),
+            source: String::new(),
+        };
+        let c = create_cmd(&g).unwrap();
+        assert_eq!(c.prog, "qm");
+        assert_eq!(c.args[..3], ["create", "120", "--name"]);
+        assert!(c.args.windows(2).any(|w| w == ["--scsi0", "local-lvm:32"]) && !c.args.contains(&"--cdrom".to_string()));
+        let iso = NewGuest { source: "local:iso/d.iso".into(), ..g.clone() };
+        assert!(create_cmd(&iso).unwrap().args.windows(2).any(|w| w == ["--cdrom", "local:iso/d.iso"]));
+        let ct = NewGuest { kind: Kind::Lxc, source: "local:vztmpl/debian-12.tar.zst".into(), ..g.clone() };
+        let c = create_cmd(&ct).unwrap();
+        assert_eq!((c.prog.as_str(), c.args[1].as_str(), c.args[2].as_str()), ("pct", "120", "local:vztmpl/debian-12.tar.zst"));
+        assert!(
+            c.args.windows(2).any(|w| w == ["--rootfs", "local-lvm:32"])
+                && c.args.windows(2).any(|w| w == ["--net0", "name=eth0,bridge=vmbr0,ip=dhcp"])
+        );
+        // A container needs a template; the rest is checked too.
+        assert!(create_cmd(&NewGuest { kind: Kind::Lxc, ..g.clone() }).is_err());
+        assert!(create_cmd(&NewGuest { name: "-x".into(), ..g.clone() }).is_err());
+        assert!(create_cmd(&NewGuest { cores: 0, ..g.clone() }).is_err());
+        assert!(create_cmd(&NewGuest { mem_mib: 4, ..g.clone() }).is_err());
+        assert!(create_cmd(&NewGuest { disk_gib: 0, ..g.clone() }).is_err());
+        assert!(create_cmd(&NewGuest { storage: "a,b".into(), ..g.clone() }).is_err());
+        assert!(create_cmd(&NewGuest { source: "nocolon".into(), ..g }).is_err());
     }
 
     #[test]
