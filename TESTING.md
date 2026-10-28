@@ -382,6 +382,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.86 | `W` on a VM lists USB / PCI / serial / TPM / EFI disk; Up/Down picks, typing sets the value (storage for TPM and EFI starts as local-lvm), Enter asks y/n and runs `qm set` on the first free key; a wrong value or an existing tpmstate0/efidisk0 refuses; a container refuses `W`. |
 | 3p.87 | `I` on a VM shows the cloud-init fields filled from the config; Tab moves, a wrong value shows a red reason and Enter stays, Enter on a good form lists the changed fields and runs `qm set` after y/n; empty fields are not sent; no password field; a container refuses `I`. |
 | 3p.88 | `p` on a backup job opens the six keep-* counts filled from the job; digits only, Tab moves, a wrong value shows a red reason; Enter asks y/n (red line: older backups are deleted at the next run) and runs `pvesh set /cluster/backup/<id> --prune-backups ...`; all empty runs `--delete prune-backups`. |
+| 3p.89 | With `webhook_format = "ntfy"` a new alert is POSTed to the ntfy address as plain text with a Title and Priority header (checked against ntfy.sh); the default json is unchanged. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

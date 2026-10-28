@@ -22,6 +22,8 @@ pub struct Config {
     pub webhook: String,
     /// Only these kinds of alert are POSTed (`storage`, `pool`, `temp`, `vzdump`, `failed`, `stale`); empty: all of them.
     pub webhook_kinds: Vec<String>,
+    /// `json` (Slack, Discord, Mattermost, Teams; the default) or `ntfy` (plain text with a title and a priority).
+    pub webhook_format: String,
     /// Ring the terminal bell when a new alert appears.
     pub bell: bool,
     /// The cleanup keeps this many of the newest backups of each guest.
@@ -41,6 +43,7 @@ impl Default for Config {
             mem_full: 90.0,
             webhook: String::new(),
             webhook_kinds: vec![],
+            webhook_format: "json".into(),
             bell: true,
             keep_backups: 3,
             snapshot_days: 30,
@@ -82,6 +85,11 @@ impl Config {
                 _ => vec![],
             };
         }
+        if let Some(v) =
+            t.get("webhook_format").and_then(|v| v.as_str()).map(|v| v.trim().to_ascii_lowercase()).filter(|v| v == "json" || v == "ntfy")
+        {
+            c.webhook_format = v;
+        }
         if let Some(v) = t.get("bell").and_then(|v| v.as_bool()) {
             c.bell = v;
         }
@@ -117,6 +125,9 @@ impl Config {
         }
         if let Some(v) = get("YAGURA_WEBHOOK_KINDS") {
             self.webhook_kinds = kinds(&v);
+        }
+        if let Some(v) = get("YAGURA_WEBHOOK_FORMAT").map(|v| v.trim().to_ascii_lowercase()).filter(|v| v == "json" || v == "ntfy") {
+            self.webhook_format = v;
         }
         if let Some(v) = get("YAGURA_WEBHOOK") {
             self.webhook = v.trim().to_string();
@@ -192,6 +203,24 @@ mem_full = 0
         assert_eq!(c.webhook_kinds, ["storage", "vzdump"]);
         let c = Config::from_toml("webhook_kinds = \"temp, pool\"\n");
         assert_eq!(c.webhook_kinds, ["temp", "pool"]);
+        assert_eq!(c.webhook_format, "json");
+        assert_eq!(
+            Config::from_toml(
+                "webhook_format = \"NTFY\"
+"
+            )
+            .webhook_format,
+            "ntfy"
+        );
+        assert_eq!(
+            Config::from_toml(
+                "webhook_format = \"xml\"
+"
+            )
+            .webhook_format,
+            "json"
+        );
+        assert_eq!(Config::default().with_env(|k| (k == "YAGURA_WEBHOOK_FORMAT").then(|| "ntfy".to_string())).webhook_format, "ntfy");
         let c = c.with_env(|k| (k == "YAGURA_WEBHOOK_KINDS").then(String::new));
         assert!(c.webhook_kinds.is_empty());
         let c = Config::from_toml("keep_backups = 5\nsnapshot_days = 0\n");

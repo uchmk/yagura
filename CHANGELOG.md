@@ -6,6 +6,12 @@
 
 ## [未リリース]
 
+## [0.73.111] - 2026-10-28
+
+### 追加
+
+- yagura-tui: webhook の送り方を選べる。`tui.toml` の `webhook_format = "ntfy"`（環境変数 `YAGURA_WEBHOOK_FORMAT`）にすると、JSON ではなく本文をそのままの文字で、`Title: yagura <host>`・`Priority: high`・`Tags: warning` を付けて POST する（ntfy.sh と自前の ntfy 向け）。既定は今までの `json`（Slack・Discord・Mattermost・Teams）。しきい値は `disk_full`・`storage_full`・`temp_hot`・`cpu_hot`・`mem_full` で前から変えられる。
+
 ## [0.73.110] - 2026-10-28
 
 ### 追加

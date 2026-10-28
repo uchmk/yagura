@@ -1644,7 +1644,7 @@ fn watch_alerts(app: &mut App) {
             .filter(|(k, _)| !app.alerts_seen.contains(k) && webhook::wanted(&cfg.webhook_kinds, k))
             .map(|(_, t)| t.as_str())
             .collect();
-        webhook::send(&cfg.webhook, &app.model.host, &sent);
+        webhook::send(&cfg.webhook, &app.model.host, &sent, &cfg.webhook_format);
         if config::get().bell {
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x07");

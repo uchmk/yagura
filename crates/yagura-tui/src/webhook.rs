@@ -40,17 +40,36 @@ pub fn valid_url(url: &str) -> bool {
         && !url.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
-/// The `curl` arguments for one POST.
-pub fn curl_args(url: &str, body: &str) -> Vec<String> {
-    ["-sS", "-m", "10", "-X", "POST", "-H", "Content-Type: application/json", "-d", body, "--", url].iter().map(|s| s.to_string()).collect()
+/// The `curl` arguments for one POST. `ntfy` sends the text as it is with a title and a priority (ntfy.sh and a self-hosted ntfy);
+/// anything else sends the JSON body.
+pub fn curl_args(url: &str, host: &str, alerts: &[&str], format: &str) -> Vec<String> {
+    let mut a: Vec<String> = ["-sS", "-m", "10", "-X", "POST"].iter().map(|s| s.to_string()).collect();
+    if format == "ntfy" {
+        // A header value is one line without control characters.
+        let title: String = format!("yagura {host}").chars().filter(|c| !c.is_control()).collect();
+        for h in [format!("Title: {title}"), "Priority: high".to_string(), "Tags: warning".to_string()] {
+            a.extend(["-H".to_string(), h]);
+        }
+        a.extend([
+            "-d".to_string(),
+            alerts.join(
+                "
+",
+            ),
+        ]);
+    } else {
+        a.extend(["-H".to_string(), "Content-Type: application/json".to_string(), "-d".to_string(), payload(host, alerts)]);
+    }
+    a.extend(["--".to_string(), url.to_string()]);
+    a
 }
 
 /// POST the new alerts on a thread of their own. A missing `curl` or a failed request is dropped.
-pub fn send(url: &str, host: &str, alerts: &[&str]) {
+pub fn send(url: &str, host: &str, alerts: &[&str], format: &str) {
     if !valid_url(url) || alerts.is_empty() {
         return;
     }
-    let args = curl_args(url, &payload(host, alerts));
+    let args = curl_args(url, host, alerts, format);
     let _ = std::thread::Builder::new().name("yagura-webhook".into()).spawn(move || {
         let _ = Command::new("curl").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     });
@@ -84,7 +103,27 @@ mod tests {
         assert!(!valid_url("https://"));
         assert!(!valid_url("https://a b"));
         assert!(!valid_url(""));
-        let a = curl_args("https://x/h", "{}");
+        let a = curl_args("https://x/h", "pve", &["a"], "json");
         assert_eq!(&a[a.len() - 2..], ["--", "https://x/h"]);
+        assert!(a.contains(&"Content-Type: application/json".to_string()));
+    }
+
+    #[test]
+    fn ntfy_gets_plain_text_with_a_title() {
+        let a = curl_args(
+            "https://ntfy.sh/t",
+            "pve
+x",
+            &["a", "b"],
+            "ntfy",
+        );
+        assert!(a.contains(&"Title: yagura pvex".to_string()) && a.contains(&"Priority: high".to_string()));
+        let i = a.iter().position(|x| x == "-d").unwrap();
+        assert_eq!(
+            a[i + 1],
+            "a
+b"
+        );
+        assert!(!a.iter().any(|x| x.contains("json")));
     }
 }
