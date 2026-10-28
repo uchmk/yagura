@@ -509,6 +509,20 @@ pub fn ha_cmd(sid: &str, on: bool) -> Cmd {
     Cmd::new("pvesh", &["set", &format!("/cluster/ha/resources/{sid}"), "--state", if on { "started" } else { "disabled" }])
 }
 
+/// `pvesh create /cluster/ha/resources --sid vm:<id>|ct:<id> --state started`: put a guest under HA.
+pub fn ha_add_cmd(kind: Kind, id: u32) -> Cmd {
+    Cmd::new("pvesh", &["create", "/cluster/ha/resources", "--sid", &ha_sid(kind, id), "--state", "started"])
+}
+
+/// `pvesh delete /cluster/ha/resources/<sid>`: take a guest out of HA (the guest itself is not touched).
+pub fn ha_remove_cmd(kind: Kind, id: u32) -> Cmd {
+    Cmd::new("pvesh", &["delete", &format!("/cluster/ha/resources/{}", ha_sid(kind, id))])
+}
+
+fn ha_sid(kind: Kind, id: u32) -> String {
+    format!("{}:{id}", if kind == Kind::Lxc { "ct" } else { "vm" })
+}
+
 /// How a user or token expiry reads: `0` is never.
 fn expiry(e: u64, now: u64) -> String {
     match e {
@@ -1579,6 +1593,13 @@ mod tests {
         }
         assert_eq!(storage_remove_cmd("nas-1").args, ["delete", "/storage/nas-1"]);
         assert_eq!(storage_remove_cmd("a b").args, ["delete", "/storage/invalid"]);
+    }
+
+    #[test]
+    fn a_guest_is_added_to_and_removed_from_ha() {
+        assert_eq!(ha_add_cmd(Kind::Qemu, 100).args, ["create", "/cluster/ha/resources", "--sid", "vm:100", "--state", "started"]);
+        assert_eq!(ha_add_cmd(Kind::Lxc, 101).args[3], "ct:101");
+        assert_eq!(ha_remove_cmd(Kind::Lxc, 101).args, ["delete", "/cluster/ha/resources/ct:101"]);
     }
 
     #[test]

@@ -664,6 +664,24 @@ pub fn sure_clone(t: &Target, name: &str, full: bool, newid: u32) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label, cmds: vec![ops::clone_cmd(t.kind, t.id, newid, name, full)] }, lines }
 }
 
+/// The last question for putting the guest `t` under HA (`add`) or taking it out again.
+pub fn sure_ha_guest(t: &Target, add: bool) -> Sure {
+    let (line, cmd, label) = if add {
+        (
+            format!("put {} {} under HA: the cluster starts it again on another node when its node fails", t.id, t.name),
+            ops::ha_add_cmd(t.kind, t.id),
+            format!("ha add {}", t.id),
+        )
+    } else {
+        (
+            format!("take {} {} out of HA: it is no longer restarted elsewhere, the guest itself keeps running", t.id, t.name),
+            ops::ha_remove_cmd(t.kind, t.id),
+            format!("ha remove {}", t.id),
+        )
+    };
+    Sure { t: Target::none(), op: Op::Cmds { label, cmds: vec![cmd] }, lines: vec![(line, !add)] }
+}
+
 /// The last question for moving the guest `t` to the node `to`.
 pub fn sure_migrate(t: &Target, to: &str, running: bool, online: bool, cmd: ops::Cmd) -> Sure {
     let how = match (running, t.kind, online) {
@@ -1714,6 +1732,16 @@ mod tests {
         let l = target(Kind::Lxc);
         let (d, _) = key(Dialog::Migrate { t: l, nodes, sel: 0, running: true, online: true }, KeyCode::Tab, none);
         let Some(Dialog::Migrate { online: true, .. }) = d else { panic!("Tab changed a container") };
+    }
+
+    #[test]
+    fn the_ha_questions_name_the_guest() {
+        let s = sure_ha_guest(&target(Kind::Qemu), true);
+        assert_eq!(s.op, Op::Cmds { label: "ha add 101".into(), cmds: vec![ops::ha_add_cmd(Kind::Qemu, 101)] });
+        assert!(s.lines.iter().all(|l| !l.1));
+        let s = sure_ha_guest(&target(Kind::Lxc), false);
+        assert_eq!(s.op, Op::Cmds { label: "ha remove 101".into(), cmds: vec![ops::ha_remove_cmd(Kind::Lxc, 101)] });
+        assert!(s.lines.iter().any(|l| l.1));
     }
 
     #[test]

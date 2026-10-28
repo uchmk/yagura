@@ -6,6 +6,12 @@
 
 ## [未リリース]
 
+## [0.73.94] - 2026-10-28
+
+### 追加
+
+- yagura-tui: ゲストの画面で `O` がカーソルのゲストを HA に入れ（`pvesh create /cluster/ha/resources --sid vm:ID|ct:ID --state started`）、`Q` が HA から外す（`pvesh delete /cluster/ha/resources/<sid>`。ゲスト自体は止めない）。どちらも y/n で聞き、外すほうは赤字。テンプレートは対象外。
+
 ## [0.73.93] - 2026-10-28
 
 ### 追加

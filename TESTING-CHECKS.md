@@ -2,7 +2,7 @@
 
 Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md is the source**; ticks (`[x]`) are the only thing to write by hand here, and they survive regeneration.
 
-304 rows to press (304 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
+305 rows to press (305 in TESTING.md, 0 of them covered by `cargo test`). Progress per section: `cargo run --example make-testcheck -- --stats`. `[~]` does not count as done until the owner looks at the same picture.
 
 ## 1. Start and idle
 
@@ -320,6 +320,7 @@ Generated from TESTING.md by `cargo run --example make-testcheck`. **TESTING.md 
 - [ ] **3p.70** In the Storage screen, `n` walks through name, server, export and content and asks y/n before `pvesh create /storage --type nfs`; a bad name, path or content is refused with a reason. `X` asks y/n before `pvesh delete /storage/<name>`, with a red warning when the storage holds guest disks.
 - [ ] **3p.71** `N` in the host screen lists the node's network interfaces with address, gateway, ports/slaves, VLAN and comment; an interface that should start but is not active reads DOWN in red.
 - [ ] **3p.72** `M` on a guest picks another online node; a running VM moves live (Tab switches to offline), a container restarts on the target. Moves that stop the guest show a red warning, and y/n is asked last.
+- [ ] **3p.73** `O` on a guest puts it under HA and `Q` takes it out again (the guest keeps running); both ask first, removing in red; a template is refused.
 - [ ] **3p.26** a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`.
 
 ## 4. Resizing the columns
