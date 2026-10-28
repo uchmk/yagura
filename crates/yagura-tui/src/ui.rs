@@ -438,10 +438,14 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             }
             l.push(Line::raw(""));
             if ask.is_some() {
-                l.push(Line::styled(format!("  move to storage: {text}_"), Style::new().add_modifier(Modifier::BOLD)));
-                l.push(Line::styled("type the storage  Enter ask  Esc back", DIM));
+                let what = if *ask == Some('i') { "insert ISO (storage:iso/name.iso)" } else { "move to storage" };
+                l.push(Line::styled(format!("  {what}: {text}_"), Style::new().add_modifier(Modifier::BOLD)));
+                l.push(Line::styled("type it  Enter ask  Esc back", DIM));
             } else {
-                l.push(Line::styled("j/k drive  m move to another storage  d detach (on an unused volume: destroy)  Esc close", DIM));
+                l.push(Line::styled(
+                    "j/k drive  m move  d detach (unused: destroy)  CD-ROM: i insert ISO  e eject  a add drive  Esc close",
+                    DIM,
+                ));
             }
             (format!(" drives of {} {} ", t.id, t.name), l)
         }

@@ -602,6 +602,27 @@ pub fn sure_disk_move(t: &Target, key: &str, value: &str, to: &str) -> Option<Su
     })
 }
 
+/// The last question for putting the ISO `volid` into the CD-ROM drive `key` (`none` ejects it).
+pub fn sure_cdrom(t: &Target, key: &str, value: &str, volid: &str) -> Option<Sure> {
+    let cmd = ops::cdrom_set_cmd(t.id, key, volid)?;
+    let (label, head) = if volid == "none" {
+        (format!("eject {key}"), format!("eject the disc from {key} of {} {}", t.id, t.name))
+    } else {
+        (format!("insert {volid} into {key}"), format!("insert {volid} into {key} of {} {}", t.id, t.name))
+    };
+    Some(Sure { t: Target::none(), op: Op::Cmds { label, cmds: vec![cmd] }, lines: vec![(head, false), (format!("  now {value}"), false)] })
+}
+
+/// The last question for adding an empty CD-ROM drive.
+pub fn sure_cdrom_add(t: &Target, keys: &[String]) -> Option<Sure> {
+    let (dev, cmd) = ops::cdrom_add_cmd(t.id, keys)?;
+    Some(Sure {
+        t: Target::none(),
+        op: Op::Cmds { label: format!("add CD-ROM {dev}"), cmds: vec![cmd] },
+        lines: vec![(format!("add an empty CD-ROM drive {dev} to {} {}", t.id, t.name), false)],
+    })
+}
+
 /// The last question for detaching the drive `key`, or for destroying it when it is an `unusedN` volume.
 pub fn sure_disk_detach(t: &Target, key: &str, value: &str) -> Option<Sure> {
     if key == "rootfs" {
@@ -1425,6 +1446,20 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 (None, KeyCode::Char('j') | KeyCode::Down) => sel = (sel + 1).min(n.saturating_sub(1)),
                 (None, KeyCode::Char('k') | KeyCode::Up) => sel = sel.saturating_sub(1),
                 (None, KeyCode::Char('m')) if cur.as_ref().is_some_and(|(k, v)| !ops::is_unused(k) && !ops::is_cdrom(v)) => ask = Some('m'),
+                (None, KeyCode::Char('i')) if t.kind == Kind::Qemu && cur.as_ref().is_some_and(|(_, v)| ops::is_cdrom(v)) => {
+                    ask = Some('i')
+                }
+                (None, KeyCode::Char('e')) if t.kind == Kind::Qemu && cur.as_ref().is_some_and(|(_, v)| ops::is_cdrom(v)) => {
+                    if let Some(s) = cur.and_then(|(k, v)| sure_cdrom(&t, &k, &v, "none")) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
+                (None, KeyCode::Char('a')) if t.kind == Kind::Qemu => {
+                    let keys = list.as_ref().map(|l| l.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()).unwrap_or_default();
+                    if let Some(s) = sure_cdrom_add(&t, &keys) {
+                        return (Some(Dialog::Sure(s)), Next::Nothing);
+                    }
+                }
                 (None, KeyCode::Char('d')) => {
                     if let Some(s) = cur.and_then(|(k, v)| sure_disk_detach(&t, &k, &v)) {
                         return (Some(Dialog::Sure(s)), Next::Nothing);
@@ -1433,11 +1468,15 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
                 (Some(_), KeyCode::Backspace) => {
                     text.pop();
                 }
-                (Some(_), KeyCode::Char(c)) if (c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && text.len() < 40 => {
+                (Some(w), KeyCode::Char(c))
+                    if (c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || (w == 'i' && matches!(c, ':' | '/')))
+                        && text.len() < 80 =>
+                {
                     text.push(c)
                 }
-                (Some(_), KeyCode::Enter) => {
-                    if let Some(s) = cur.and_then(|(k, v)| sure_disk_move(&t, &k, &v, &text)) {
+                (Some(w), KeyCode::Enter) => {
+                    let s = cur.and_then(|(k, v)| if w == 'i' { sure_cdrom(&t, &k, &v, &text) } else { sure_disk_move(&t, &k, &v, &text) });
+                    if let Some(s) = s {
                         return (Some(Dialog::Sure(s)), Next::Nothing);
                     }
                 }
@@ -2145,6 +2184,38 @@ mod tests {
         let Some(Dialog::Sure(s)) = key(open(2), KeyCode::Char('d'), none).0 else { panic!("no destroy question") };
         assert!(s.lines[0].1 && s.lines[0].0.starts_with("destroy unused0"));
         assert!(sure_disk_detach(&target(Kind::Lxc), "rootfs", "a:r").is_none());
+    }
+
+    #[test]
+    fn a_cdrom_is_filled_ejected_and_added_from_the_drives() {
+        let none = |_: &Target| None;
+        let list = vec![("scsi0".to_string(), "a:d0".to_string()), ("ide2".to_string(), "none,media=cdrom".to_string())];
+        let open = |sel| Dialog::Disks { t: target(Kind::Qemu), list: Some(list.clone()), sel, ask: None, text: String::new() };
+        // i is only for a CD-ROM row.
+        assert!(matches!(key(open(0), KeyCode::Char('i'), none).0, Some(Dialog::Disks { ask: None, .. })));
+        let (mut d, _) = key(open(1), KeyCode::Char('i'), none);
+        assert!(matches!(d, Some(Dialog::Disks { ask: Some('i'), .. })));
+        for c in "local:iso/d.iso".chars() {
+            d = key(d.unwrap(), KeyCode::Char(c), none).0;
+        }
+        let Some(Dialog::Sure(s)) = key(d.unwrap(), KeyCode::Enter, none).0 else { panic!("no insert question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds {
+                label: "insert local:iso/d.iso into ide2".into(),
+                cmds: vec![ops::cdrom_set_cmd(101, "ide2", "local:iso/d.iso").unwrap()]
+            }
+        );
+        let Some(Dialog::Sure(s)) = key(open(1), KeyCode::Char('e'), none).0 else { panic!("no eject question") };
+        assert_eq!(s.op, Op::Cmds { label: "eject ide2".into(), cmds: vec![ops::cdrom_set_cmd(101, "ide2", "none").unwrap()] });
+        let Some(Dialog::Sure(s)) = key(open(0), KeyCode::Char('a'), none).0 else { panic!("no add question") };
+        assert_eq!(
+            s.op,
+            Op::Cmds { label: "add CD-ROM ide0".into(), cmds: vec![ops::cdrom_add_cmd(101, &["scsi0".into(), "ide2".into()]).unwrap().1] }
+        );
+        // A container has no CD-ROM.
+        let ct = Dialog::Disks { t: target(Kind::Lxc), list: Some(list.clone()), sel: 1, ask: None, text: String::new() };
+        assert!(matches!(key(ct, KeyCode::Char('a'), none).0, Some(Dialog::Disks { .. })));
     }
 
     #[test]

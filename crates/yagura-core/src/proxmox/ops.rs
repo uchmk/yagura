@@ -1516,6 +1516,23 @@ pub fn net_del_cmd(kind: Kind, id: u32, dev: &str) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["set", &id.to_string(), "--delete", dev])
 }
 
+/// Puts the ISO `volid` (`local:iso/debian.iso`) into the CD-ROM drive `key` of a VM, or ejects it when `volid` is `none`.
+pub fn cdrom_set_cmd(id: u32, key: &str, volid: &str) -> Option<Cmd> {
+    let drive =
+        ["ide", "sata", "scsi"].iter().any(|p| key.strip_prefix(p).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())));
+    if !drive || volid.is_empty() || volid.contains([',', ' ']) {
+        return None;
+    }
+    Some(Cmd::new("qm", &["set", &id.to_string(), &format!("--{key}"), &format!("{volid},media=cdrom")]))
+}
+
+/// A new empty CD-ROM drive on the first free `ideN` (0 to 3) of a VM: its key and the command.
+pub fn cdrom_add_cmd(id: u32, keys: &[String]) -> Option<(String, Cmd)> {
+    let dev = free_key(keys, "ide", 3)?;
+    let cmd = cdrom_set_cmd(id, &dev, "none")?;
+    Some((dev, cmd))
+}
+
 /// A new disk of `gib` GiB on `storage`: the first free `scsiN` (a VM) or `mpN` mounted at `/mnt/diskN` (a container), its value
 /// and the command. `keys` are all keys of the guest's configuration (so a CD-ROM or cloud-init drive is never replaced).
 pub fn disk_add_cmd(kind: Kind, id: u32, keys: &[String], storage: &str, gib: u32) -> Option<(String, String, Cmd)> {
@@ -1890,6 +1907,25 @@ mod tests {
         let m = disk_move_cmd("pve", Kind::Lxc, 200, "mp0", "tank");
         assert_eq!(m.args[1], "/nodes/pve/lxc/200/move_volume");
         assert_eq!(disk_detach_cmd(Kind::Qemu, 100, "scsi1").args, ["set", "100", "--delete", "scsi1"]);
+    }
+
+    #[test]
+    fn a_cdrom_gets_an_iso_or_is_ejected() {
+        let c = cdrom_set_cmd(100, "ide2", "local:iso/d.iso").unwrap();
+        assert_eq!(
+            (c.prog.as_str(), c.args.clone()),
+            ("qm", vec!["set".to_string(), "100".into(), "--ide2".into(), "local:iso/d.iso,media=cdrom".into()])
+        );
+        assert_eq!(cdrom_set_cmd(100, "ide2", "none").unwrap().args[3], "none,media=cdrom");
+        assert!(
+            cdrom_set_cmd(100, "net0", "none").is_none()
+                && cdrom_set_cmd(100, "ide2", "").is_none()
+                && cdrom_set_cmd(100, "ide2", "a,b").is_none()
+        );
+        let keys: Vec<String> = ["ide0", "ide2"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(cdrom_add_cmd(100, &keys).unwrap().0, "ide1");
+        let full: Vec<String> = (0..4).map(|n| format!("ide{n}")).collect();
+        assert!(cdrom_add_cmd(100, &full).is_none());
     }
 
     #[test]
