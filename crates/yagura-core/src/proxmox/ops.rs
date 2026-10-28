@@ -360,6 +360,11 @@ pub fn clone_cmd(kind: Kind, id: u32, newid: u32, name: &str, full: bool) -> Cmd
     Cmd::new(prog, &args)
 }
 
+/// `qm template` / `pct template`: turn a stopped guest into a template (it can not be started again).
+pub fn template_cmd(kind: Kind, id: u32) -> Cmd {
+    Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["template", &id.to_string()])
+}
+
 /// `qm destroy` / `pct destroy`: remove a stopped guest and its disks (`--purge` also drops it from backup jobs and HA).
 pub fn destroy_cmd(kind: Kind, id: u32) -> Cmd {
     Cmd::new(if kind == Kind::Lxc { "pct" } else { "qm" }, &["destroy", &id.to_string(), "--purge"])
@@ -505,6 +510,7 @@ mod tests {
     fn clone_and_destroy_commands() {
         assert_eq!(clone_cmd(Kind::Qemu, 100, 105, "web", true).args, ["clone", "100", "105", "--name", "web", "--full", "1"]);
         assert_eq!(clone_cmd(Kind::Lxc, 101, 106, "ct", false), Cmd::new("pct", &["clone", "101", "106", "--hostname", "ct"]));
+        assert_eq!(template_cmd(Kind::Qemu, 100), Cmd::new("qm", &["template", "100"]));
         assert_eq!(destroy_cmd(Kind::Qemu, 100).args, ["destroy", "100", "--purge"]);
         assert_eq!(destroy_cmd(Kind::Lxc, 101).prog, "pct");
         assert!(valid_guest_name("web-1.lan") && !valid_guest_name("") && !valid_guest_name("-x") && !valid_guest_name("a b"));

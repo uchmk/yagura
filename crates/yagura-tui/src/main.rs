@@ -137,7 +137,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  t console  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -437,6 +437,7 @@ fn run(
             KeyCode::Char('n') if app.view == View::Guests => open_node(app),
             KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
             KeyCode::Char('D') if matches!(app.view, View::Guests | View::Graph(_)) => open_destroy(app),
+            KeyCode::Char('T') if matches!(app.view, View::Guests | View::Graph(_)) => open_template(app),
             KeyCode::Char('t') if matches!(app.view, View::Guests | View::Graph(_)) => open_console(app),
             KeyCode::Char('x') if app.view == View::Tasks => open_stop(app),
             KeyCode::Char(' ') if app.view == View::Guests => {
@@ -527,7 +528,9 @@ fn open_clone(app: &mut App) {
     app.status.clear();
     let name = format!("{}-clone", t.name);
     let name = if proxmox::ops::valid_guest_name(&name) { name } else { format!("clone-{}", t.id) };
-    app.dialog = Some(dialog::Dialog::Clone { t, name, full: true });
+    // A template is cloned linked at first: it is quick and shares the template's disks.
+    let full = !t.template;
+    app.dialog = Some(dialog::Dialog::Clone { t, name, full });
 }
 
 /// `D`: delete the guest under the cursor, if it is stopped.
@@ -540,6 +543,21 @@ fn open_destroy(app: &mut App) {
     }
     app.status.clear();
     app.dialog = Some(dialog::Dialog::Sure(dialog::sure_destroy(&t)));
+}
+
+/// `T`: turn the stopped guest under the cursor into a template.
+fn open_template(app: &mut App) {
+    let Some(t) = target(app) else { return };
+    if t.template {
+        app.status = format!("{}: already a template (Y makes guests from it)", t.id);
+        return;
+    }
+    if app.model.cluster.guests.iter().any(|g| g.id == t.id && g.status != proxmox::Status::Stopped) {
+        app.status = format!("{}: stop the guest before turning it into a template", t.id);
+        return;
+    }
+    app.status.clear();
+    app.dialog = Some(dialog::Dialog::Sure(dialog::sure_template(&t)));
 }
 
 /// `S`: ask for a snapshot name.

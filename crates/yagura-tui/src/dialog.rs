@@ -410,6 +410,15 @@ pub fn sure_clone(t: &Target, name: &str, full: bool, newid: u32) -> Sure {
     Sure { t: Target::none(), op: Op::Cmds { label, cmds: vec![ops::clone_cmd(t.kind, t.id, newid, name, full)] }, lines }
 }
 
+/// The last question for turning the (stopped) guest `t` into a template.
+pub fn sure_template(t: &Target) -> Sure {
+    let lines = vec![
+        (format!("turn {} {} into a template", t.id, t.name), false),
+        ("a template can not be started again; clone it (Y) to get guests from it, linked clones share its disks".into(), true),
+    ];
+    Sure { t: Target::none(), op: Op::Cmds { label: format!("template {}", t.id), cmds: vec![ops::template_cmd(t.kind, t.id)] }, lines }
+}
+
 /// The last question for deleting the (stopped) guest `t` with its disks.
 pub fn sure_destroy(t: &Target) -> Sure {
     let lines = vec![
@@ -846,6 +855,9 @@ mod tests {
     fn the_clone_and_delete_questions_say_what_happens() {
         let s = sure_clone(&target(Kind::Qemu), "web", false, 105);
         assert_eq!(s.op, Op::Cmds { label: "clone as 105".into(), cmds: vec![ops::clone_cmd(Kind::Qemu, 101, 105, "web", false)] });
+        let s = sure_template(&target(Kind::Qemu));
+        assert_eq!(s.op, Op::Cmds { label: "template 101".into(), cmds: vec![ops::template_cmd(Kind::Qemu, 101)] });
+        assert!(s.lines.iter().any(|l| l.1));
         let s = sure_destroy(&target(Kind::Lxc));
         assert_eq!(s.op, Op::Cmds { label: "delete 101".into(), cmds: vec![ops::destroy_cmd(Kind::Lxc, 101)] });
         assert!(s.lines.iter().any(|l| l.1));

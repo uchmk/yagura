@@ -341,6 +341,7 @@ Setup for all of them: put the `[[alert]]` of 3k.1 in config.toml (the settings 
 | 3p.45 | In the node menu `u` asks y/n and starts `apt update` on the node (a task shows in the Tasks screen); `R` / `X` ask y/n with the number of running guests in red and then reboot / shut the node down. |
 | 3p.46 | `Y` in the guest list (or the graph screen) asks for a name (default `<name>-clone`), Enter looks up a free id and asks y/n; then `qm clone` / `pct clone` makes a full copy (a template can be switched to a linked clone with Tab) and the new guest appears in the list. |
 | 3p.47 | `D` on a running guest says to stop it first; on a stopped guest it asks y/n with a red warning and then `qm destroy` / `pct destroy --purge` removes it with its disks. |
+| 3p.48 | `T` on a stopped guest asks y/n with a red warning and then `qm template` / `pct template` turns it into a template; on a running guest or a template it says why not. |
 | 3p.26 | a failed backup job (including one over several guests) in the last 24 h shows a red `backup FAILED` in the header and counts in `alerts`. |
 
 

@@ -439,7 +439,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D  clone / delete;  Storage: Enter backups",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T  clone / delete / template;  Storage: Enter backups",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
