@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use yagura_core::Msg;
-use yagura_core::proxmox::rrd::Point;
+use yagura_core::proxmox::rrd::{Point, Timeframe};
 use yagura_core::proxmox::{self, Cluster, History, Inside, Power, Status};
 
 use model::{HIST_EVERY, Model, Sort, View, bytes};
@@ -43,6 +43,8 @@ pub struct App {
     /// When the graphs on screen were last asked for, and whether that is still running.
     pub rrd_at: Option<Instant>,
     pub rrd_busy: bool,
+    /// How far back the graphs reach (`H` steps it).
+    pub rrd_span: Timeframe,
     /// The same for the processes inside the entered guest.
     pub procs_at: Option<Instant>,
     pub procs_busy: bool,
@@ -110,8 +112,8 @@ enum Job {
     Inside(u32, Inside),
     Power(u32, Power, Result<(), String>),
     Latest(String, Option<String>),
-    HostRrd(Vec<Point>),
-    GuestRrd(u32, Vec<Point>),
+    HostRrd(Timeframe, Vec<Point>),
+    GuestRrd(u32, Timeframe, Vec<Point>),
     GuestProcs(u32, Option<Vec<proxmox::GuestProc>>),
     /// A guest's task log and snapshots.
     History(u32, History),
@@ -140,7 +142,7 @@ fn main() -> std::io::Result<()> {
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
+            "yagura-tui {}\n\nkeys: Tab view (host, guests, procs, storage, tasks)  j/k move  / find  s sort  Enter graphs  Esc back  Space mark  u upgrade  o start  d shutdown  r reboot  S snapshot  b backup  m snapshots  C cleanup  c config  e edit mem/cores  z grow disk  Y clone  D delete  T template  N network  F firewall  H graph span  t console  w save a log  n node menu  x stop task  Enter (storage) backups  l logs  / n N find in a log  ? help  q quit",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -158,6 +160,7 @@ fn main() -> std::io::Result<()> {
         confirm: None,
         rrd_at: None,
         rrd_busy: false,
+        rrd_span: Timeframe::default(),
         procs_at: None,
         procs_busy: false,
         guest_sel: 0,
@@ -344,13 +347,22 @@ fn run(
                 Job::Latest(key, tag) => {
                     app.model.latest.insert(key, tag);
                 }
-                Job::HostRrd(p) => {
+                Job::HostRrd(span, p) => {
                     app.rrd_busy = false;
-                    app.model.host_rrd = p;
+                    if span == app.rrd_span {
+                        app.model.host_rrd = p;
+                    } else {
+                        // Asked before `H` changed the span: ask again.
+                        app.rrd_at = None;
+                    }
                 }
-                Job::GuestRrd(id, p) => {
+                Job::GuestRrd(id, span, p) => {
                     app.rrd_busy = false;
-                    app.model.guest_rrd.insert(id, p);
+                    if span == app.rrd_span {
+                        app.model.guest_rrd.insert(id, p);
+                    } else {
+                        app.rrd_at = None;
+                    }
                 }
                 Job::GuestProcs(id, p) => {
                     app.procs_busy = false;
@@ -476,6 +488,7 @@ fn run(
             KeyCode::Char('Y') if matches!(app.view, View::Guests | View::Graph(_)) => open_clone(app),
             KeyCode::Char('D') if matches!(app.view, View::Guests | View::Graph(_)) => open_destroy(app),
             KeyCode::Char('T') if matches!(app.view, View::Guests | View::Graph(_)) => open_template(app),
+            KeyCode::Char('H') if matches!(app.view, View::Host | View::Guests | View::Graph(_)) => cycle_span(app),
             KeyCode::Char('N') if matches!(app.view, View::Guests | View::Graph(_)) => open_net(app, jobs_tx),
             KeyCode::Char('F') if matches!(app.view, View::Guests | View::Graph(_)) => open_firewall(app, jobs_tx),
             KeyCode::Char('t') if matches!(app.view, View::Guests | View::Graph(_)) => open_console(app),
@@ -1143,6 +1156,15 @@ fn open_graphs(app: &mut App) {
     app.rrd_at = None;
 }
 
+/// `H`: the graphs reach one step further back (an hour, a day, a week, a month, a year, and round).
+fn cycle_span(app: &mut App) {
+    app.rrd_span = app.rrd_span.next();
+    app.model.host_rrd.clear();
+    app.model.guest_rrd.clear();
+    app.rrd_at = None;
+    app.status = format!("graphs: last {}", app.rrd_span.short());
+}
+
 /// Read the history of what the screen graphs, on a thread of its own, now and
 /// then while that screen is up.
 fn refresh_rrd(app: &mut App, tx: &Sender<Job>) {
@@ -1150,13 +1172,14 @@ fn refresh_rrd(app: &mut App, tx: &Sender<Job>) {
         return;
     }
     let tx = tx.clone();
+    let span = app.rrd_span;
     match app.view {
         View::Host | View::Guests => {
             let Some(node) = app.model.host_node().map(str::to_string) else { return };
             std::thread::Builder::new()
                 .name("yagura-rrd".into())
                 .spawn(move || {
-                    let _ = tx.send(Job::HostRrd(proxmox::rrd::node(&node)));
+                    let _ = tx.send(Job::HostRrd(span, proxmox::rrd::node(&node, span)));
                 })
                 .expect("spawn the rrd thread");
         }
@@ -1167,7 +1190,7 @@ fn refresh_rrd(app: &mut App, tx: &Sender<Job>) {
             std::thread::Builder::new()
                 .name("yagura-rrd".into())
                 .spawn(move || {
-                    let _ = tx.send(Job::GuestRrd(id, proxmox::rrd::guest(&node, kind, id)));
+                    let _ = tx.send(Job::GuestRrd(id, span, proxmox::rrd::guest(&node, kind, id, span)));
                 })
                 .expect("spawn the rrd thread");
         }

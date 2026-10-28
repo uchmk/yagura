@@ -8,6 +8,52 @@ use serde_json::Value;
 
 use super::Kind;
 
+/// How far back a graph reaches (`rrddata --timeframe`). Proxmox keeps coarser points the further back it goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Timeframe {
+    #[default]
+    Hour,
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+impl Timeframe {
+    /// The value `pvesh` takes.
+    pub fn arg(self) -> &'static str {
+        match self {
+            Timeframe::Hour => "hour",
+            Timeframe::Day => "day",
+            Timeframe::Week => "week",
+            Timeframe::Month => "month",
+            Timeframe::Year => "year",
+        }
+    }
+
+    /// The span in a graph's corner (`-7d`).
+    pub fn short(self) -> &'static str {
+        match self {
+            Timeframe::Hour => "1h",
+            Timeframe::Day => "1d",
+            Timeframe::Week => "7d",
+            Timeframe::Month => "30d",
+            Timeframe::Year => "1y",
+        }
+    }
+
+    /// The next longer span, and back to an hour after a year.
+    pub fn next(self) -> Timeframe {
+        match self {
+            Timeframe::Hour => Timeframe::Day,
+            Timeframe::Day => Timeframe::Week,
+            Timeframe::Week => Timeframe::Month,
+            Timeframe::Month => Timeframe::Year,
+            Timeframe::Year => Timeframe::Hour,
+        }
+    }
+}
+
 /// One minute of history. Rates are bytes per second, as `rrddata` gives them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
@@ -49,21 +95,21 @@ pub fn parse(json: &str) -> Vec<Point> {
         .collect()
 }
 
-fn pvesh(path: &str) -> Vec<Point> {
-    match Command::new("pvesh").args(["get", path, "--timeframe", "hour", "--output-format", "json"]).output() {
+fn pvesh(path: &str, span: Timeframe) -> Vec<Point> {
+    match Command::new("pvesh").args(["get", path, "--timeframe", span.arg(), "--output-format", "json"]).output() {
         Ok(o) if o.status.success() => parse(&String::from_utf8_lossy(&o.stdout)),
         _ => Vec::new(),
     }
 }
 
-/// The last hour of a node. Runs `pvesh`: call it from a thread of its own.
-pub fn node(name: &str) -> Vec<Point> {
-    pvesh(&format!("/nodes/{name}/rrddata"))
+/// A node's history over `span`. Runs `pvesh`: call it from a thread of its own.
+pub fn node(name: &str, span: Timeframe) -> Vec<Point> {
+    pvesh(&format!("/nodes/{name}/rrddata"), span)
 }
 
-/// The last hour of a guest. Runs `pvesh`: call it from a thread of its own.
-pub fn guest(node: &str, kind: Kind, id: u32) -> Vec<Point> {
-    pvesh(&format!("/nodes/{node}/{}/{id}/rrddata", if kind == Kind::Lxc { "lxc" } else { "qemu" }))
+/// A guest's history over `span`. Runs `pvesh`: call it from a thread of its own.
+pub fn guest(node: &str, kind: Kind, id: u32, span: Timeframe) -> Vec<Point> {
+    pvesh(&format!("/nodes/{node}/{}/{id}/rrddata", if kind == Kind::Lxc { "lxc" } else { "qemu" }), span)
 }
 
 #[cfg(test)]
@@ -83,6 +129,19 @@ mod tests {
     fn a_node_row_uses_its_own_names() {
         let p = parse(r#"[{"time":1,"cpu":0.1,"iowait":0.02,"memused":8,"memtotal":16,"rootused":3,"roottotal":30}]"#);
         assert_eq!((p[0].mem, p[0].maxmem, p[0].disk, p[0].maxdisk, p[0].iowait), (8.0, 16.0, 3.0, 30.0, 0.02));
+    }
+
+    #[test]
+    fn the_span_steps_round_from_an_hour_to_a_year() {
+        let mut s = Timeframe::default();
+        let mut seen = vec![s.arg()];
+        for _ in 0..4 {
+            s = s.next();
+            seen.push(s.arg());
+        }
+        assert_eq!(seen, ["hour", "day", "week", "month", "year"]);
+        assert_eq!(s.short(), "1y");
+        assert_eq!(s.next(), Timeframe::Hour);
     }
 
     #[test]

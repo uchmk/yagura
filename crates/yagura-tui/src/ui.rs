@@ -16,7 +16,7 @@ use yagura_core::proxmox::{Guest, Kind, Note, Status, apps};
 use crate::App;
 use crate::dialog::Dialog;
 use crate::model::{Model, View, age, bytes, disk_full, disk_pct, stale_limit, unix_now};
-use yagura_core::proxmox::rrd::Point;
+use yagura_core::proxmox::rrd::{Point, Timeframe};
 
 const RED: Style = Style::new().fg(Color::Red);
 const SELECTED: Style = Style::new().bg(Color::Blue).add_modifier(Modifier::BOLD);
@@ -561,7 +561,7 @@ fn help(f: &mut Frame) {
         "  u o d r    update / start / shut down / reboot the guest (asks first)",
         "  S b m      snapshot / backup (vzdump) / snapshot list of the guest (asks first)",
         "  C  x       clean up old snapshots and backups / stop a task (Tasks) (asks first)",
-        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  Storage: Enter backups, i contents, J backup jobs",
+        "  c e z t n  config / mem+cores / grow disk / console / node menu;  Y D T N F  clone / delete / template / network / firewall;  H graph span 1h-1y;  Storage: Enter backups, i contents, J backup jobs",
         "",
         "MARKS",
         "  UPD 3      3 packages can be updated;  3*  the guest wants a reboot",
@@ -1077,6 +1077,14 @@ fn ratio(a: f64, b: f64) -> f64 {
     if b > 0.0 { a / b * 100.0 } else { 0.0 }
 }
 
+/// Name the span on the graphs that come from Proxmox's history (the GPU's own five minutes stay as they are).
+fn spanned(mut charts: Vec<Chart>, span: Timeframe) -> Vec<Chart> {
+    for c in charts.iter_mut().filter(|c| c.span == "1h") {
+        c.span = span.short();
+    }
+    charts
+}
+
 fn series(pts: &[Point], f: impl Fn(&Point) -> f64) -> Vec<f64> {
     pts.iter().map(f).collect()
 }
@@ -1138,7 +1146,7 @@ fn guest_strip(f: &mut Frame, app: &App, id: u32, area: Rect) {
     let m: &Model = &app.model;
     let name = m.cluster.guests.iter().find(|g| g.id == id).map_or(String::new(), |g| g.name.clone());
     let Some(p) = m.guest_rrd.get(&id).filter(|p| !p.is_empty()) else {
-        f.render_widget(Paragraph::new(Line::styled(format!(" {id} {name}: reading... (last hour)"), DIM)), area);
+        f.render_widget(Paragraph::new(Line::styled(format!(" {id} {name}: reading... (last {})", app.rrd_span.short()), DIM)), area);
         return;
     };
     let mut charts =
@@ -1155,6 +1163,7 @@ fn guest_strip(f: &mut Frame, app: &App, id: u32, area: Rect) {
     if area.width >= 160 {
         charts.push(rate("disk write", series(p, |x| x.diskwrite)));
     }
+    let charts = spanned(charts, app.rrd_span);
     let cells = Layout::horizontal(vec![Constraint::Ratio(1, charts.len() as u32); charts.len()]).split(area);
     for (c, ch) in charts.iter().enumerate() {
         chart(f, cells[c], ch);
@@ -1179,9 +1188,10 @@ fn strip(f: &mut Frame, app: &App, area: Rect) {
         charts.push(if m.gpu.is_empty() { no_gpu() } else { gpu_chart(&m.gpu.iter().copied().collect::<Vec<f32>>()) });
     }
     if p.is_empty() {
-        f.render_widget(Paragraph::new(Line::styled(" host graphs: reading... (last hour)", DIM)), area);
+        f.render_widget(Paragraph::new(Line::styled(format!(" host graphs: reading... (last {})", app.rrd_span.short()), DIM)), area);
         return;
     }
+    let charts = spanned(charts, app.rrd_span);
     let cells = Layout::horizontal(vec![Constraint::Ratio(1, charts.len() as u32); charts.len()]).split(area);
     for (c, ch) in charts.iter().enumerate() {
         chart(f, cells[c], ch);
@@ -1208,7 +1218,7 @@ fn host_graphs(f: &mut Frame, app: &App, area: Rect) {
     if p.is_empty() {
         charts.truncate(6);
     }
-    grid(f, area, &charts);
+    grid(f, area, &spanned(charts, app.rrd_span));
 }
 
 #[cfg(test)]
@@ -1241,6 +1251,7 @@ mod tests {
             confirm: None,
             rrd_at: None,
             rrd_busy: false,
+            rrd_span: Timeframe::default(),
             procs_at: None,
             procs_busy: false,
             guest_sel: 0,
@@ -1390,6 +1401,24 @@ mod tests {
             a.selected = s;
             t.draw(|f| draw(f, &a)).unwrap();
         }
+    }
+
+    #[test]
+    fn the_graphs_name_their_span() {
+        let pts: Vec<Point> = (0..70).map(|i| Point { cpu: i as f64 / 70.0, ..Point::default() }).collect();
+        let mut a = app(View::Host);
+        a.model.host_rrd = pts;
+        let mut t = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        t.draw(|f| draw(f, &a)).unwrap();
+        assert!(text(t.backend().buffer()).contains("-1h"));
+        a.rrd_span = Timeframe::Week;
+        t.draw(|f| draw(f, &a)).unwrap();
+        let s = text(t.backend().buffer());
+        assert!(s.contains("-7d") && !s.contains("-1h"), "{s}");
+        a.model.host_rrd.clear();
+        a.view = View::Guests;
+        t.draw(|f| draw(f, &a)).unwrap();
+        assert!(text(t.backend().buffer()).contains("last 7d"));
     }
 
     #[test]
