@@ -821,6 +821,58 @@ pub fn storage_add_nfs_cmd(fields: &[String; 4]) -> Result<Cmd, String> {
     ))
 }
 
+/// The storage types the add form offers, and the labels of its fields `[name, a, b, content]` for each (an empty label is skipped).
+pub const STORAGE_KINDS: [(&str, [&str; 4]); 4] = [
+    ("nfs", ["name", "server", "export", "content"]),
+    ("dir", ["name", "path", "", "content"]),
+    ("lvmthin", ["name", "volume group", "thin pool", "content"]),
+    ("zfspool", ["name", "pool", "", "content"]),
+];
+
+/// The call that adds a storage of type `kind` (one of `STORAGE_KINDS`) from `[name, a, b, content]`.
+pub fn storage_add_cmd(kind: &str, fields: &[String; 4]) -> Result<Cmd, String> {
+    if kind == "nfs" {
+        return storage_add_nfs_cmd(fields);
+    }
+    let [name, a, b, content] = fields.each_ref().map(|s| s.trim());
+    let word = |s: &str, extra: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c));
+    if !word(name, "._-") || !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return Err("the storage name is like local-2 (letters, digits, . _ -)".into());
+    }
+    let kinds = ["images", "rootdir", "vztmpl", "iso", "backup", "snippets"];
+    let content_ok = !content.is_empty() && content.split(',').all(|c| kinds.contains(&c));
+    let mut args = vec!["create", "/storage", "--storage", name, "--type", kind];
+    match kind {
+        "dir" => {
+            if !word(a, "/._-") || !a.starts_with('/') || a.contains("..") {
+                return Err("the path is a directory on every node like /mnt/data".into());
+            }
+            args.extend(["--path", a]);
+        }
+        "lvmthin" => {
+            if !word(a, "._-+") || a.starts_with('-') {
+                return Err("the volume group is like pve".into());
+            }
+            if !word(b, "._-+") || b.starts_with('-') {
+                return Err("the thin pool is like data".into());
+            }
+            args.extend(["--vgname", a, "--thinpool", b]);
+        }
+        "zfspool" => {
+            if !word(a, "/._-:") || a.starts_with(['-', '/']) || a.contains("..") {
+                return Err("the pool is a ZFS dataset like tank/vm".into());
+            }
+            args.extend(["--pool", a]);
+        }
+        _ => return Err("this storage type is not supported".into()),
+    }
+    if !content_ok {
+        return Err("the content is a list of images, rootdir, vztmpl, iso, backup, snippets".into());
+    }
+    args.extend(["--content", content]);
+    Ok(Cmd::new("pvesh", &args))
+}
+
 /// The call that removes a storage definition from the cluster (the data on it is not touched).
 pub fn storage_remove_cmd(name: &str) -> Cmd {
     let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
@@ -1593,6 +1645,47 @@ mod tests {
         }
         assert_eq!(storage_remove_cmd("nas-1").args, ["delete", "/storage/nas-1"]);
         assert_eq!(storage_remove_cmd("a b").args, ["delete", "/storage/invalid"]);
+    }
+
+    #[test]
+    fn local_storages_are_added_by_type() {
+        let f = |a: [&str; 4]| a.map(String::from);
+        let c = storage_add_cmd("dir", &f(["data", "/mnt/data", "", "backup,iso"])).unwrap();
+        assert_eq!(c.args, ["create", "/storage", "--storage", "data", "--type", "dir", "--path", "/mnt/data", "--content", "backup,iso"]);
+        let c = storage_add_cmd("lvmthin", &f(["thin", "pve", "data", "images,rootdir"])).unwrap();
+        assert_eq!(
+            c.args,
+            [
+                "create",
+                "/storage",
+                "--storage",
+                "thin",
+                "--type",
+                "lvmthin",
+                "--vgname",
+                "pve",
+                "--thinpool",
+                "data",
+                "--content",
+                "images,rootdir"
+            ]
+        );
+        let c = storage_add_cmd("zfspool", &f(["tank", "tank/vm", "", "images"])).unwrap();
+        assert_eq!(c.args[6..], ["--pool", "tank/vm", "--content", "images"]);
+        assert_eq!(storage_add_cmd("nfs", &f(["nas", "10.0.0.5", "/e", "backup"])).unwrap().args[5], "nfs");
+        for (k, bad) in [
+            ("dir", ["d", "mnt", "", "backup"]),
+            ("dir", ["d", "/a/../b", "", "backup"]),
+            ("dir", ["d", "/a", "", "movies"]),
+            ("lvmthin", ["t", "", "data", "images"]),
+            ("lvmthin", ["t", "pve", "-x", "images"]),
+            ("zfspool", ["z", "/tank", "", "images"]),
+            ("zfspool", ["z", "t;x", "", "images"]),
+            ("cifs", ["c", "a", "b", "backup"]),
+            ("dir", ["", "/a", "", "backup"]),
+        ] {
+            assert!(storage_add_cmd(k, &f(bad)).is_err(), "{k} {bad:?}");
+        }
     }
 
     #[test]

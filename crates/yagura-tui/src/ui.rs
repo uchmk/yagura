@@ -456,16 +456,16 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
             (format!(" time and DNS of {node} "), l)
         }
-        Dialog::StorageAdd { step, vals, err } => {
-            const NAMES: [&str; 4] = ["name", "server", "export", "content"];
+        Dialog::StorageAdd { kind, step, vals, err } => {
+            let (type_name, names) = crate::proxmox::ops::STORAGE_KINDS[*kind];
             const HINTS: [&str; 4] = [
                 "the storage name, like nas-1",
-                "the NFS server: a host name or an IP address",
-                "the path the server shares, like /export/pve",
+                "nfs: a host name or an IP address; dir: a path like /mnt/data; lvmthin: the volume group; zfspool: the pool like tank/vm",
+                "nfs: the path the server shares, like /export/pve; lvmthin: the thin pool, like data",
                 "images, rootdir, vztmpl, iso, backup, snippets (comma separated)",
             ];
-            let mut l = vec![];
-            for (i, n) in NAMES.iter().enumerate() {
+            let mut l = vec![Line::raw(format!("  type     {type_name}"))];
+            for (i, n) in names.iter().enumerate().filter(|(_, n)| !n.is_empty()) {
                 let cur = i == *step;
                 let st = if cur { Style::new().add_modifier(Modifier::BOLD) } else { DIM };
                 l.push(Line::styled(format!("  {n:<8} {}{}", vals[i], if cur { "_" } else { "" }), st));
@@ -475,8 +475,8 @@ fn dialog(f: &mut Frame, d: &Dialog) {
             if !err.is_empty() {
                 l.push(Line::styled(err.clone(), RED));
             }
-            l.push(Line::styled("Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
-            (" add an NFS storage ".to_string(), l)
+            l.push(Line::styled("Tab type  Enter next (the last asks y/n)  Backspace on an empty field goes back  Esc cancel", DIM));
+            (" add a storage ".to_string(), l)
         }
         Dialog::JobEdit { id, step, vals, err } => {
             const NAMES: [&str; 4] = ["storage", "schedule", "guests", "mode"];
@@ -1996,9 +1996,12 @@ mod tests {
     fn the_storage_form_draws() {
         let mut a = app(View::Storage);
         let vals = ["nas-1", "10.0.0.5", "/export", "backup"].map(String::from);
-        a.dialog = Some(Dialog::StorageAdd { step: 2, vals, err: "the export is a path on the server like /export/pve".into() });
+        a.dialog = Some(Dialog::StorageAdd { kind: 0, step: 2, vals, err: "the export is a path on the server like /export/pve".into() });
         let s = text(&render(&a));
-        assert!(s.contains("add an NFS storage") && s.contains("10.0.0.5") && s.contains("the export is a path"), "{s}");
+        assert!(
+            s.contains("add a storage") && s.contains("type     nfs") && s.contains("10.0.0.5") && s.contains("the export is a path"),
+            "{s}"
+        );
     }
 
     #[test]

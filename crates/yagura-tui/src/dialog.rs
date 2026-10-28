@@ -168,8 +168,10 @@ pub enum Dialog {
         vals: [String; 5],
         err: String,
     },
-    /// Adding an NFS storage: the fields name, server, export and content, the one being typed, and what was wrong with the last try.
+    /// Adding a storage: its type (an index into `ops::STORAGE_KINDS`), the fields name, a, b and content, the one being typed,
+    /// and what was wrong with the last try.
     StorageAdd {
+        kind: usize,
         step: usize,
         vals: [String; 4],
         err: String,
@@ -585,11 +587,21 @@ pub fn sure_node_save(node: &str, vals: &[String; 5], cmds: Vec<ops::Cmd>) -> Su
     Sure { t: Target::none(), op: Op::Cmds { label: format!("time and DNS of {node}"), cmds }, lines }
 }
 
-/// The last question for adding an NFS storage.
-pub fn sure_storage_add(vals: &[String; 4], cmd: ops::Cmd) -> Sure {
+/// The last question for adding a storage of the type `kind`.
+pub fn sure_storage_add(kind: usize, vals: &[String; 4], cmd: ops::Cmd) -> Sure {
+    let place = [vals[1].trim(), vals[2].trim()].iter().filter(|s| !s.is_empty()).map(|s| s.to_string()).collect::<Vec<_>>();
+    let place = if kind == 0 { place.join(":") } else { place.join(" ") };
     let lines = vec![
-        (format!("add the NFS storage {} ({}:{}) for {}", vals[0].trim(), vals[1].trim(), vals[2].trim(), vals[3].trim()), false),
-        ("every node of the cluster will try to mount it".into(), false),
+        (format!("add the {} storage {} ({}) for {}", ops::STORAGE_KINDS[kind].0, vals[0].trim(), place, vals[3].trim()), false),
+        (
+            if kind == 0 {
+                "every node of the cluster will try to mount it"
+            } else {
+                "it must exist on every node (or the nodes it is limited to)"
+            }
+            .into(),
+            false,
+        ),
     ];
     Sure { t: Target::none(), op: Op::Cmds { label: format!("add storage {}", vals[0].trim()), cmds: vec![cmd] }, lines }
 }
@@ -1029,32 +1041,42 @@ pub fn key(d: Dialog, code: KeyCode, free: impl Fn(&Target) -> Option<(String, u
             }
             (Some(Dialog::NodeEdit { node, step, vals, err }), Next::Nothing)
         }
-        Dialog::StorageAdd { mut step, mut vals, mut err } => {
+        Dialog::StorageAdd { mut kind, mut step, mut vals, mut err } => {
+            // The fields this type asks for, in order.
+            let steps: Vec<usize> = (0..4).filter(|&i| !ops::STORAGE_KINDS[kind].1[i].is_empty()).collect();
+            let at = steps.iter().position(|&i| i == step).unwrap_or(0);
             match code {
                 KeyCode::Esc => return (None, Next::Nothing),
+                KeyCode::Tab => {
+                    kind = (kind + 1) % ops::STORAGE_KINDS.len();
+                    step = 0;
+                    err.clear();
+                    vals[1].clear();
+                    vals[2] = if kind == 0 { "/".into() } else { String::new() };
+                }
                 KeyCode::Char(c) if !c.is_control() && vals[step].chars().count() < 80 => vals[step].push(c),
                 KeyCode::Backspace => {
-                    if vals[step].is_empty() && step > 0 {
-                        step -= 1;
+                    if vals[step].is_empty() && at > 0 {
+                        step = steps[at - 1];
                     } else {
                         vals[step].pop();
                     }
                 }
-                KeyCode::Enter if step < 3 => {
+                KeyCode::Enter if at + 1 < steps.len() => {
                     if vals[step].trim().is_empty() {
                         err = "this field cannot be empty".into();
                     } else {
-                        step += 1;
+                        step = steps[at + 1];
                         err.clear();
                     }
                 }
-                KeyCode::Enter => match ops::storage_add_nfs_cmd(&vals) {
-                    Ok(cmd) => return (Some(Dialog::Sure(sure_storage_add(&vals, cmd))), Next::Nothing),
+                KeyCode::Enter => match ops::storage_add_cmd(ops::STORAGE_KINDS[kind].0, &vals) {
+                    Ok(cmd) => return (Some(Dialog::Sure(sure_storage_add(kind, &vals, cmd))), Next::Nothing),
                     Err(e) => err = e,
                 },
                 _ => {}
             }
-            (Some(Dialog::StorageAdd { step, vals, err }), Next::Nothing)
+            (Some(Dialog::StorageAdd { kind, step, vals, err }), Next::Nothing)
         }
         Dialog::Content { node, storage, fill, list, mut sel } => {
             let n = list.as_ref().map_or(0, Vec::len);
@@ -1527,9 +1549,26 @@ mod tests {
     }
 
     #[test]
+    fn the_storage_form_changes_type_and_skips_unused_fields() {
+        let none = |_: &Target| None;
+        let form = |kind, step, vals: [&str; 4]| Dialog::StorageAdd { kind, step, vals: vals.map(String::from), err: String::new() };
+        let (d, _) = key(form(0, 2, ["a", "b", "/x", "backup"]), KeyCode::Tab, none);
+        let Some(Dialog::StorageAdd { kind: 1, step: 0, vals, .. }) = d else { panic!("Tab did not pick dir") };
+        assert_eq!((vals[0].as_str(), vals[1].as_str(), vals[2].as_str()), ("a", "", ""));
+        // A directory has no second field: after the path comes the content, and Backspace goes back past it.
+        let (d, _) = key(form(1, 1, ["d", "/mnt/d", "", "backup"]), KeyCode::Enter, none);
+        let Some(Dialog::StorageAdd { step: 3, .. }) = d else { panic!("did not skip to content") };
+        let (d, _) = key(form(1, 3, ["d", "/mnt/d", "", ""]), KeyCode::Backspace, none);
+        let Some(Dialog::StorageAdd { step: 1, .. }) = d else { panic!("did not skip back") };
+        let (d, _) = key(form(1, 3, ["d", "/mnt/d", "", "backup"]), KeyCode::Enter, none);
+        let Some(Dialog::Sure(s)) = d else { panic!("no question") };
+        assert!(s.lines[0].0.contains("dir storage d (/mnt/d)"), "{:?}", s.lines);
+    }
+
+    #[test]
     fn the_storage_forms_ask_before_adding_or_removing() {
         let none = |_: &Target| None;
-        let form = |step, vals: [&str; 4]| Dialog::StorageAdd { step, vals: vals.map(String::from), err: String::new() };
+        let form = |step, vals: [&str; 4]| Dialog::StorageAdd { kind: 0, step, vals: vals.map(String::from), err: String::new() };
         let (d, _) = key(form(0, ["", "", "/", "backup"]), KeyCode::Enter, none);
         let Some(Dialog::StorageAdd { step: 0, err, .. }) = d else { panic!("moved on with no name") };
         assert!(!err.is_empty());

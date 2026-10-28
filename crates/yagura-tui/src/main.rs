@@ -596,7 +596,7 @@ fn run(
             KeyCode::Char('n') if app.view == View::Storage => {
                 app.status.clear();
                 let vals = ["", "", "/", "backup,iso,vztmpl"].map(String::from);
-                app.dialog = Some(dialog::Dialog::StorageAdd { step: 0, vals, err: String::new() });
+                app.dialog = Some(dialog::Dialog::StorageAdd { kind: 0, step: 0, vals, err: String::new() });
             }
             KeyCode::Char('X') if app.view == View::Storage => {
                 if let Some(s) = app.model.storages_sorted().get(app.selected).map(|s| (*s).clone()) {
