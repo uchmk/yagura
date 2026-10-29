@@ -352,7 +352,9 @@ impl eframe::App for Yagura {
             .show(ui, |ui| self.title_bar(ui));
         self.notice_list(&ctx);
         if self.app.mode == Mode::Settings {
-            ui::settings::show(ui, &mut self.app, keys);
+            // ito_prefs::show fills `max_rect()`, which a top panel does not shrink: give it only what is under the bar.
+            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()));
+            ui::settings::show(&mut body, &mut self.app, keys);
         } else {
             let out = ui::frame(ui, &self.app);
             self.app.apply_out(out, &ctx);
