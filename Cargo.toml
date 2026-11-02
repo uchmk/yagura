@@ -17,7 +17,7 @@ members = [".", "crates/yagura-core", "crates/yagura-tui"]
 yagura-core = { path = "crates/yagura-core" }
 eframe = "0.36"
 egui = "0.36"
-sysinfo = { version = "0.39", default-features = false, features = ["disk", "network", "system", "user"] }
+sysinfo = { version = "0.40", default-features = false, features = ["disk", "network", "system", "user"] }
 crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
