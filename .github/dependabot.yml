@@ -1,0 +1,43 @@
+version: 2
+
+# Version updates, which are not the same thing as the security alerts in the
+# repository's settings: alerts say a dependency is vulnerable, this opens the
+# pull request that moves off it.
+#
+# Monthly and grouped, as filer does: the failure mode for a solo project is
+# not missing an update, it is twenty open pull requests nobody reads. One
+# pull request a month, carrying everything, is something that can actually
+# be looked at: CI decides whether it builds, and the whole thing merges or
+# does not.
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      cargo:
+        patterns: ["*"]
+    ignore:
+      # A new minor version of egui changes its API (0.36 renamed panels and
+      # `App::update`), and every app that uses these crates pins the same
+      # egui as they do. Moved by hand, with all of the apps.
+      # Security updates still come through: this only stops the monthly bump.
+      - dependency-name: "egui*"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # eframe is egui's own release train: a lone eframe bump pulls a second
+      # egui beside ito's and does not build.
+      - dependency-name: eframe
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+
+  # The actions in `.github/workflows` pin major versions, so this is what moves
+  # `@v7` to `@v8` rather than letting it sit until an action is deprecated and
+  # the warning turns into a failure.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      actions:
+        patterns: ["*"]
